@@ -1,0 +1,6 @@
+{
+  "name": "Fortix - Accessible API Directory & Vault",
+  "description": "An accessible, user-friendly directory and secure vault to explore, search, test, and manage API datasets, endpoints, keys, and categories.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
