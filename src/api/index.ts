@@ -18,6 +18,7 @@ import { settingsRouter } from './settings.js';
 import { systemRouter, getDependenciesHealth } from './system.js';
 import { dlqRouter } from './dlq.js';
 import reportsRouter from './reports.js';
+import { workflowRunsRouter } from './runs.js';
 import { openApiRouter, getSwaggerHtml } from './openapi.js';
 import { register, httpRequestsTotal, httpRequestDurationSeconds } from '../lib/metrics.js';
 import { db } from '../db/index.js';
@@ -130,5 +131,6 @@ export function setupApiRoutes(app: Express) {
   app.use('/api/control/topology', authenticate, requireEntitlement('TOPOLOGY'), topologyRouter);
   app.use('/api/control/dlq', authenticate, dlqRouter);
   app.use('/api/control/queue', authenticate, dlqRouter);
+  app.use('/api/control/runs', authenticate, workflowRunsRouter);
   app.use('/api', reportsRouter);
 }

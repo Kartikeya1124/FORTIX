@@ -265,7 +265,8 @@ export function setupGateway(app: Express) {
             enqueueMetric({
               id: logId,
               routeId,
-              experimentId: req.headers['x-experiment-id'] as string || null,
+              requestId,
+              experimentId: (req.headers['x-experiment-id'] as string) || (req.headers['x-fortix-run-id'] as string) || null,
               latencyMs: Math.round(durationMs),
               statusCode,
             });
@@ -299,7 +300,8 @@ export function setupGateway(app: Express) {
             enqueueMetric({
               id: logId,
               routeId,
-              experimentId: req.headers['x-experiment-id'] as string || null,
+              requestId,
+              experimentId: (req.headers['x-experiment-id'] as string) || (req.headers['x-fortix-run-id'] as string) || null,
               latencyMs: Math.round(durationMs),
               statusCode,
             });

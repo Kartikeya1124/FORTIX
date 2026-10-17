@@ -174,3 +174,27 @@ export const auditLogs = pgTable('audit_logs', {
     auditProjectTimeIdx: index('audit_project_time_idx').on(table.projectId, table.timestamp),
   };
 });
+
+export const workflowRuns = pgTable('workflow_runs', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }).notNull(),
+  routeId: text('route_id').references(() => apiRoutes.id, { onDelete: 'cascade' }).notNull(),
+  profile: text('profile').notNull(),
+  status: text('status').notNull(), // QUEUED, RUNNING, VERIFYING, COMPLETED, FAILED, CANCELLED, RECOVERY_REQUIRED
+  params: jsonb('params').notNull(),
+  timeline: jsonb('timeline').notNull(),
+  deterministicVerdict: jsonb('deterministic_verdict'),
+  aiAnalysis: jsonb('ai_analysis'),
+  evidenceSummary: jsonb('evidence_summary'),
+  cleanupStatus: text('cleanup_status').default('NOT_REQUIRED').notNull(),
+  errorMessage: text('error_message'),
+  startedAt: timestamp('started_at'),
+  completedAt: timestamp('completed_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => {
+  return {
+    workflowRunProjectIdx: index('workflow_run_project_idx').on(table.projectId, table.createdAt),
+  };
+});
+

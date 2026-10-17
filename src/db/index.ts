@@ -25,7 +25,7 @@ function createMemDb() {
     });
   });
 
-  const files = ['0000_dizzy_moon_knight.sql', '0001_spicy_jackpot.sql', '0002_webhook_deliveries.sql'];
+  const files = ['0000_dizzy_moon_knight.sql', '0001_spicy_jackpot.sql', '0002_webhook_deliveries.sql', '0003_workflow_runs.sql'];
   for (const file of files) {
     const filePath = path.join(process.cwd(), 'drizzle', file);
     if (fs.existsSync(filePath)) {
