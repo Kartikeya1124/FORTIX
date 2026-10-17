@@ -14,6 +14,9 @@ import Verifications from './pages/Verifications.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { SocketProvider } from './context/SocketContext.js';
+import { TelemetryStatusBar } from './components/TelemetryStatusBar.js';
+import { ProjectProvider, useProject } from './context/ProjectContext.js';
+import { ProjectSwitcher } from './components/ProjectSwitcher.js';
 
 function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } | null }) {
   const [searchQuery, setSearchQuery] = React.useState('');
@@ -63,6 +66,10 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
                 FortiX <span className="text-primary text-xs align-top ml-1">GATEWAY V1</span>
               </h1>
             </div>
+            {/* Desktop Project Switcher */}
+            <div className="hidden sm:block ml-2 pl-3 border-l border-subtle">
+              <ProjectSwitcher />
+            </div>
           </div>
           
           {/* Global Search Bar */}
@@ -76,31 +83,39 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
             />
           </div>
 
-          <div className="hidden lg:flex gap-6">
-            <div className="flex flex-col items-end">
-              <span className="text-[10px] uppercase text-muted font-bold tracking-widest">System Status</span>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                <span className="text-sm font-mono text-strong">OPERATIONAL</span>
-              </div>
+          <div className="flex items-center gap-3">
+            {/* Mobile Project Switcher */}
+            <div className="sm:hidden">
+              <ProjectSwitcher />
             </div>
-            <div className="flex items-center pl-4 border-l border-subtle gap-4">
-              <button
-                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                className="flex items-center gap-2 text-muted hover:text-strong transition-colors"
-                title="Toggle Theme"
-              >
-                {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-              </button>
-              <button
-                onClick={() => {
-                  localStorage.removeItem('fortix_token'); window.location.reload();
-                }}
-                className="flex items-center gap-2 text-muted hover:text-strong transition-colors"
-                title="Logout"
-              >
-                <LogOut size={18} />
-              </button>
+            <div className="hidden lg:flex gap-6">
+              <div className="flex flex-col items-end">
+                <span className="text-[10px] uppercase text-muted font-bold tracking-widest">System Status</span>
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${isDegraded ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500 animate-pulse'}`}></div>
+                  <span className={`text-sm font-mono font-bold ${isDegraded ? 'text-amber-400' : 'text-strong'}`}>
+                    {isDegraded ? 'DEGRADED' : 'OPERATIONAL'}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center pl-4 border-l border-subtle gap-4">
+                <button
+                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                  className="flex items-center gap-2 text-muted hover:text-strong transition-colors"
+                  title="Toggle Theme"
+                >
+                  {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+                </button>
+                <button
+                  onClick={() => {
+                    localStorage.removeItem('fortix_token'); window.location.reload();
+                  }}
+                  className="flex items-center gap-2 text-muted hover:text-strong transition-colors"
+                  title="Logout"
+                >
+                  <LogOut size={18} />
+                </button>
+              </div>
             </div>
           </div>
         </header>
@@ -146,6 +161,7 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
           </div>
         </main>
         
+        <TelemetryStatusBar />
         <footer className="px-6 py-2 border-t border-subtle bg-surface flex justify-between items-center shrink-0">
           <div className="text-[10px] text-muted">© 2026 Faultline Labs // FortiX Continuous Resilience & API Security Gateway</div>
           <div className="flex gap-4">
@@ -218,24 +234,35 @@ export default function App() {
     </>
   );
 
+function SocketWrapper({ children }: { children: React.ReactNode }) {
+  const { currentProject } = useProject();
   return (
-    <SocketProvider projectId={localStorage.getItem('fortix_project_id') || undefined}>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Layout healthStatus={healthStatus} />}>
-            <Route index element={<Dashboard />} />
-            <Route path="apis" element={<APIs />} />
-            <Route path="security" element={<Security />} />
-            <Route path="experiments" element={<Experiments />} />
-            <Route path="resilience" element={<Resilience />} />
-            <Route path="threats" element={<Threats />} />
-            <Route path="topology" element={<Topology />} />
-            <Route path="verifications" element={<Verifications />} />
-            <Route path="settings" element={<Settings />} />
-            <Route path="*" element={<div className="p-8 text-center text-muted">Feature in development</div>} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+    <SocketProvider projectId={currentProject?.id}>
+      {children}
     </SocketProvider>
+  );
+}
+
+  return (
+    <BrowserRouter>
+      <ProjectProvider>
+        <SocketWrapper>
+          <Routes>
+            <Route path="/" element={<Layout healthStatus={healthStatus} />}>
+              <Route index element={<Dashboard />} />
+              <Route path="apis" element={<APIs />} />
+              <Route path="security" element={<Security />} />
+              <Route path="experiments" element={<Experiments />} />
+              <Route path="resilience" element={<Resilience />} />
+              <Route path="threats" element={<Threats />} />
+              <Route path="topology" element={<Topology />} />
+              <Route path="verifications" element={<Verifications />} />
+              <Route path="settings" element={<Settings />} />
+              <Route path="*" element={<div className="p-8 text-center text-muted">Feature in development</div>} />
+            </Route>
+          </Routes>
+        </SocketWrapper>
+      </ProjectProvider>
+    </BrowserRouter>
   );
 }

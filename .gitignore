@@ -36,3 +36,7 @@ dist-ssr
 
 # Local artifact storage
 /storage
+
+# Redis database dump
+dump.rdb
+*.rdb

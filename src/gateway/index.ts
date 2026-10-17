@@ -206,25 +206,60 @@ export function setupGateway(app: Express) {
         }
       }
 
-            // 6. Proxy
+      // 6. Proxy with cancellation-aware upstream timeout and resource cleanup
+      const upstreamTimeoutMs = parseInt(process.env.GATEWAY_UPSTREAM_TIMEOUT_MS || '5000', 10);
+
       const proxy = createProxyMiddleware({
         target: route.targetUrl,
         router: function(req) {
             // Bypass DNS for the demo api
             if (route.targetUrl.includes('fortix-demo-api')) {
-                return route.targetUrl.replace(/fortix-demo-api(\.[a-z0-9-]+)?/i, '127.0.0.1:3001');
+                try {
+                    const u = new URL(route.targetUrl);
+                    const port = u.port || '3001';
+                    return `${u.protocol}//127.0.0.1:${port}${u.pathname}${u.search}`;
+                } catch {
+                    return route.targetUrl.replace(/fortix-demo-api(\.[a-z0-9-]+)?/i, '127.0.0.1:3001');
+                }
             }
             return route.targetUrl;
         },
         changeOrigin: true,
         pathRewrite: { [`^/proxy/${routeId}`]: '' },
-        timeout: 5000,
-        proxyTimeout: 5000,
+        proxyTimeout: upstreamTimeoutMs,
         on: {
+          proxyReq: (proxyReq, req, res) => {
+            let isResponseCompleted = false;
+
+            const onFinish = () => {
+              isResponseCompleted = true;
+              cleanup();
+            };
+
+            const onClientAbort = () => {
+              // Only abort upstream work if the response hasn't completed and is not finished
+              if (!isResponseCompleted && !res.writableEnded && !res.writableFinished) {
+                logger.warn({ routeId, requestId }, '[Gateway] Client connection terminated prematurely. Aborting upstream request.');
+                try {
+                  proxyReq.destroy();
+                } catch {}
+              }
+              cleanup();
+            };
+
+            const cleanup = () => {
+              res.removeListener('finish', onFinish);
+              res.removeListener('close', onClientAbort);
+              req.removeListener('aborted', onClientAbort);
+            };
+
+            res.once('finish', onFinish);
+            res.once('close', onClientAbort);
+            req.once('aborted', onClientAbort);
+          },
           proxyRes: async (proxyRes, req, res) => {
             const durationMs = Number(process.hrtime.bigint() - startHrTime) / 1000000;
             const statusCode = proxyRes.statusCode || 500;
-            const isError = statusCode >= 400;
             const logId = uuidv4();
             
             enqueueMetric({
@@ -240,25 +275,42 @@ export function setupGateway(app: Express) {
               });
             }).catch(logger.error);
           },
-          error: async (err, req, res) => {
+          error: async (err: any, req, res) => {
             const durationMs = Number(process.hrtime.bigint() - startHrTime) / 1000000;
             const logId = uuidv4();
+
+            // Distinguish upstream timeout (504) vs general upstream failure/connection refused (502)
+            const isTimeout =
+              err?.code === 'ETIMEDOUT' ||
+              err?.code === 'ESOCKETTIMEDOUT' ||
+              err?.code === 'ECONNABORTED' ||
+              err?.code === 'ERR_GATEWAY_TIMEOUT' ||
+              (err?.message && (
+                err.message.toLowerCase().includes('timeout') ||
+                err.message.toLowerCase().includes('etimedout') ||
+                err.message.toLowerCase().includes('esockettimedout')
+              ));
+
+            const statusCode = isTimeout ? 504 : 502;
+            const errorMessage = isTimeout
+              ? `Gateway Timeout: Upstream target timed out after ${upstreamTimeoutMs}ms`
+              : 'Bad Gateway: Upstream failure';
             
             enqueueMetric({
               id: logId,
               routeId,
               experimentId: req.headers['x-experiment-id'] as string || null,
               latencyMs: Math.round(durationMs),
-              statusCode: 502,
+              statusCode,
             });
             Promise.resolve().then(() => {
               broadcast(route.projectId, 'metric:new', { 
-                id: logId, routeId, latencyMs: Math.round(durationMs), statusCode: 502
+                id: logId, routeId, latencyMs: Math.round(durationMs), statusCode
               });
             }).catch(logger.error);
             
             if (!(res as Response).headersSent) {
-              (res as Response).status(502).json({ error: 'Bad Gateway: Upstream failure' });
+              (res as Response).status(statusCode).json({ error: errorMessage });
             }
           }
         }

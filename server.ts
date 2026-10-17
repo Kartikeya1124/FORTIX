@@ -28,11 +28,39 @@ process.on('unhandledRejection', (reason: any) => {
 
 let isShuttingDown = false;
 
-// Production Security Guardrail
+// Production Security Guardrails
+export function validateProductionJwtSecret(secret?: string): { valid: boolean; reason?: string } {
+  if (!secret || typeof secret !== 'string') {
+    return { valid: false, reason: 'JWT_SECRET is missing or empty' };
+  }
+  if (secret.length < 32) {
+    return { valid: false, reason: 'JWT_SECRET must be at least 32 characters long' };
+  }
+  const disallowedDefaults = [
+    'dev_secret_key',
+    'secret',
+    'changeme',
+    'production-secret-change-me',
+    'password',
+    'fortix_secret',
+    '12345678901234567890123456789012',
+    'abcdefghijklmnopqrstuvwxyz123456'
+  ];
+  if (disallowedDefaults.includes(secret.toLowerCase())) {
+    return { valid: false, reason: 'JWT_SECRET contains a known development placeholder or default password' };
+  }
+  const distinctChars = new Set(secret).size;
+  if (distinctChars < 8) {
+    return { valid: false, reason: 'JWT_SECRET has insufficient entropy (fewer than 8 distinct characters)' };
+  }
+  return { valid: true };
+}
+
 if (process.env.NODE_ENV === 'production') {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret === 'dev_secret_key' || secret.length < 16) {
-    console.warn('[SECURITY WARNING] Production mode detected with default or short JWT_SECRET. Ensure strong secret is set in production deployment.');
+  const validation = validateProductionJwtSecret(process.env.JWT_SECRET);
+  if (!validation.valid) {
+    console.error(`[SECURITY FATAL] Production startup rejected: ${validation.reason}.`);
+    process.exit(1);
   }
 }
 
@@ -54,20 +82,18 @@ async function startServer() {
       return res.status(503).json({ status: 'shutting_down' });
     }
     const health = await getDependenciesHealth();
-    if (health.status !== 'healthy') {
-      return res.status(503).json({ status: 'degraded', postgres: health.postgres.status, redis: health.redis.status });
-    }
-    res.status(200).json({ status: 'ok', postgres: health.postgres.status, redis: health.redis.status });
+    const statusCode = health.status === 'healthy' ? 200 : 503;
+    res.status(statusCode).json({ status: health.status, postgres: health.postgres, redis: health.redis });
   });
 
   app.get('/health/dependencies', async (req, res) => {
     const health = await getDependenciesHealth();
-    res.status(health.status === 'healthy' ? 200 : 503).json(health);
+    res.status(200).json(health);
   });
 
   app.get('/health', async (req, res) => {
     const health = await getDependenciesHealth();
-    res.status(health.status === 'healthy' ? 200 : 503).json(health);
+    res.status(200).json(health);
   });
 
   const server = http.createServer(app);

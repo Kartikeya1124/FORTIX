@@ -2,8 +2,10 @@ import { fetchWithAuth } from "../lib/api.js";
 import { useEffect, useState } from "react";
 import React from 'react';
 import { Card } from '../components/ui/card.js';
+import { useProject } from '../context/ProjectContext.js';
 
 export default function Security() {
+  const { currentProject } = useProject();
   const [policies, setPolicies] = useState<any[]>([]);
   const [routes, setRoutes] = useState<any[]>([]);
   const [isAdding, setIsAdding] = useState(false);
@@ -15,7 +17,7 @@ export default function Security() {
     windowSeconds: 60
   });
 
-  const projectId = localStorage.getItem('fortix_project_id') || '';
+  const projectId = currentProject?.id || localStorage.getItem('fortix_project_id') || '';
 
   const fetchData = () => {
     fetchWithAuth(`/api/control/policies?projectId=${projectId}`).then(r => r.json()).then(setPolicies).catch(() => {});
@@ -24,7 +26,7 @@ export default function Security() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [projectId]);
 
   const createPolicy = async () => {
     if (!newPolicy.routeId) return alert('Select a route');

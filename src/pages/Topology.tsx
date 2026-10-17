@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { SocketContext } from '../context/SocketContext.js';
+import { useProject } from '../context/ProjectContext.js';
 
 interface TopologyMetrics {
   requestCount: number;
@@ -60,31 +61,14 @@ interface TopologySnapshot {
 
 export default function Topology() {
   const socketCtx = useContext(SocketContext);
+  const { currentProject } = useProject();
   const [topology, setTopology] = useState<TopologySnapshot | null>(null);
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<TopologyEdge | null>(null);
   const [timeWindow, setTimeWindow] = useState<number>(15);
   const [loading, setLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [projectId, setProjectId] = useState<string>('');
-
-  // Fetch projects to select active project
-  useEffect(() => {
-    async function loadProject() {
-      try {
-        const res = await fetchWithAuth('/api/control/projects');
-        if (res.ok) {
-          const projs = await res.json();
-          if (projs.length > 0) {
-            setProjectId(projs[0].id);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load projects', err);
-      }
-    }
-    loadProject();
-  }, []);
+  const projectId = currentProject?.id || '';
 
   const fetchTopology = useCallback(async (showSpinner = false) => {
     if (!projectId) return;

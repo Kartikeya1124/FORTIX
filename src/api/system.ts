@@ -1,5 +1,5 @@
 import express from 'express';
-import { db } from '../db/index.js';
+import { db, getStorageMode } from '../db/index.js';
 import { redisConnection } from '../redis.js';
 import { sql } from 'drizzle-orm';
 import { getSocketStats } from '../socket.js';
@@ -23,42 +23,47 @@ export async function getDependenciesHealth() {
   let redisStatus = 'healthy';
   let dbLatencyMs = 0;
   let redisLatencyMs = 0;
+  let dbError: string | undefined = undefined;
 
   const dbStart = Date.now();
   try {
+    let timeoutId: any;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('PostgreSQL check timed out (1000ms bounded threshold)')), 1000);
+    });
+
     await Promise.race([
       db.execute(sql`SELECT 1`),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('DB Query Timeout')), 3500))
+      timeoutPromise
     ]);
+    clearTimeout(timeoutId);
     dbLatencyMs = Date.now() - dbStart;
-  } catch (err) {
-    // Retry once in case of cold connection TLS handshake
-    try {
-      const retryStart = Date.now();
-      await Promise.race([
-        db.execute(sql`SELECT 1`),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('DB Query Retry Timeout')), 3000))
-      ]);
-      dbLatencyMs = Date.now() - retryStart;
-      dbStatus = 'healthy';
-    } catch (retryErr) {
-      dbStatus = 'unhealthy';
-    }
+    dbStatus = 'healthy';
+    dbError = undefined;
+  } catch (err: any) {
+    dbStatus = 'error';
+    dbError = err?.message || 'Database connection error';
   }
 
   const redisStart = Date.now();
   try {
     if (redisConnection.status && redisConnection.status !== 'ready' && redisConnection.status !== 'connecting') {
-      redisStatus = 'unhealthy';
+      redisStatus = 'error';
     } else {
+      let timeoutId: any;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Redis Ping Timeout')), 1000);
+      });
       await Promise.race([
         redisConnection.ping(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Redis Ping Timeout')), 2500))
+        timeoutPromise
       ]);
+      clearTimeout(timeoutId);
       redisLatencyMs = Date.now() - redisStart;
+      redisStatus = 'healthy';
     }
   } catch (err: any) {
-    redisStatus = 'unhealthy';
+    redisStatus = 'error';
   }
 
   const socketStats = getSocketStats();
@@ -71,7 +76,9 @@ export async function getDependenciesHealth() {
     api: 'healthy',
     postgres: {
       status: dbStatus,
-      latencyMs: dbLatencyMs
+      latencyMs: dbLatencyMs,
+      error: dbError,
+      storageMode: getStorageMode()
     },
     redis: {
       status: redisStatus,

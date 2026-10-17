@@ -39,17 +39,19 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DATABASE_URL=postgres://fortix:fortixpassword@postgres:5432/fortix_db
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=production-secret-change-me
-      - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
+      - STRICT_PERSISTENT_DB=true
+      - DATABASE_URL=${DATABASE_URL:-postgres://fortix:fortixpassword@postgres:5432/fortix_db}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - REDIS_FAILURE_BEHAVIOR=fail-closed
+      - JWT_SECRET=${JWT_SECRET:-fx_staging_sec_9f81a7b6c5d4e3f201a9b8c7d6e5f4a3}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health/live"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/health/ready || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3

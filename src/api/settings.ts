@@ -4,7 +4,7 @@ import { db } from '../db/index.js';
 import { projectSettings, auditLogs, projects } from '../db/schema.js';
 import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { requireProjectOwnership } from './projects.js';
+import { requireProjectOwnership } from '../middleware/project.js';
 import { AuthRequest } from '../middleware/auth.js';
 import { broadcast } from '../socket.js';
 import { redisConnection } from '../redis.js';

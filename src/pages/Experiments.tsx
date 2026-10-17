@@ -2,8 +2,10 @@ import { fetchWithAuth } from "../lib/api.js";
 import React, { useEffect, useState } from 'react';
 import { Card } from '../components/ui/card.js';
 import { Play, XCircle, CheckCircle, Clock, ShieldAlert, Target, ShieldCheck, Zap, RotateCcw, Trash2, AlertTriangle, Layers, Activity, RefreshCw } from 'lucide-react';
+import { useProject } from '../context/ProjectContext.js';
 
 export default function Experiments() {
+  const { currentProject } = useProject();
   const [activeTab, setActiveTab] = useState<'lifecycle' | 'dlq'>('lifecycle');
   const [experiments, setExperiments] = useState<any[]>([]);
   const [routes, setRoutes] = useState<any[]>([]);
@@ -31,7 +33,7 @@ export default function Experiments() {
       setRoutes(data);
       if (data.length > 0) setSelectedRouteId(data[0].id);
     }).catch(() => {});
-  }, []);
+  }, [currentProject?.id]);
 
   const fetchDlqData = async () => {
     setIsDlqLoading(true);
@@ -72,7 +74,7 @@ export default function Experiments() {
       fetchDlqData();
     }, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentProject?.id]);
 
   const triggerExperiment = async () => {
     if (!isAuthorized) return;

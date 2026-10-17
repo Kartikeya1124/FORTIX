@@ -1,14 +1,16 @@
 import { AlertingSettings } from "../components/AlertingSettings.js";
+import { ProjectManagement } from "../components/ProjectManagement.js";
 import React, { useState, useEffect } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useSearchParams } from "react-router-dom";
 import { motion } from 'motion/react';
 import { 
   Settings as SettingsIcon, Shield, User, Globe, AlertTriangle, Bell, 
-  Server, Activity, Save, CheckCircle2, History, RefreshCw, Sliders, Check
+  Server, Activity, Save, CheckCircle2, History, RefreshCw, Sliders, Check, FolderKanban
 } from 'lucide-react';
 import { fetchWithAuth } from '../lib/api.js';
 
 const TABS = [
+  { id: 'projects', label: 'API Projects', icon: FolderKanban },
   { id: 'general', label: 'General', icon: SettingsIcon },
   { id: 'account', label: 'Account', icon: User },
   { id: 'gateway', label: 'Gateway', icon: Globe },
@@ -23,7 +25,21 @@ const TABS = [
 
 export default function Settings() {
   const { theme, setTheme } = useOutletContext<any>();
-  const [activeTab, setActiveTab] = useState("general");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(tabParam || "projects");
+
+  useEffect(() => {
+    if (tabParam && tabParam !== activeTab) {
+      setActiveTab(tabParam);
+    }
+  }, [tabParam]);
+
+  const handleTabChange = (tabId: string) => {
+    setActiveTab(tabId);
+    setSearchParams({ tab: tabId });
+  };
+
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const projectId = localStorage.getItem('fortix_project_id') || '';
@@ -306,7 +322,7 @@ export default function Settings() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => handleTabChange(tab.id)}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs font-semibold tracking-wide uppercase transition ${
                   isActive 
                     ? 'bg-primary text-inverted shadow-sm font-bold' 
@@ -326,6 +342,11 @@ export default function Settings() {
             <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400">
               {error}
             </div>
+          )}
+
+          {/* TAB 0: API PROJECTS */}
+          {activeTab === 'projects' && (
+            <ProjectManagement />
           )}
 
           {/* TAB 1: GENERAL */}
@@ -885,7 +906,9 @@ export default function Settings() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs font-mono">
                   <div className="p-4 bg-base border border-subtle rounded-xl text-center">
                     <span className="text-muted uppercase tracking-wider block mb-1">PostgreSQL</span>
-                    <strong className="text-emerald-400 text-sm">{systemHealth?.postgres?.status || 'Healthy'}</strong>
+                    <strong className={`text-sm ${systemHealth?.postgres?.status === 'healthy' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {systemHealth?.postgres?.status ? systemHealth.postgres.status.toUpperCase() : 'UNKNOWN'}
+                    </strong>
                     {systemHealth?.postgres?.latencyMs !== undefined && (
                       <span className="text-[10px] text-muted block mt-1">{systemHealth.postgres.latencyMs}ms query latency</span>
                     )}

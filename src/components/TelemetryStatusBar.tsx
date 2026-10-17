@@ -5,10 +5,11 @@ import { fetchWithAuth } from '../lib/api.js';
 
 export function TelemetryStatusBar() {
   const { connectionState, eventsReceived, eventsPerSec, latencyMs, pingServer, reconnectCount } = useSocket();
-  const [systemHealth, setSystemHealth] = useState<{ status: string; postgres: string; redis: string }>({
+  const [systemHealth, setSystemHealth] = useState<{ status: string; postgres: string; redis: string; error?: string; storageMode?: string }>({
     status: 'healthy',
     postgres: 'healthy',
-    redis: 'healthy'
+    redis: 'healthy',
+    storageMode: 'in-memory'
   });
   const [testCount, setTestCount] = useState<number>(57);
 
@@ -21,7 +22,9 @@ export function TelemetryStatusBar() {
             setSystemHealth({
               status: data.status,
               postgres: data.postgres.status,
-              redis: data.redis.status
+              redis: data.redis.status,
+              error: data.postgres.error,
+              storageMode: data.postgres.storageMode
             });
           }
         })
@@ -87,10 +90,15 @@ export function TelemetryStatusBar() {
         </div>
 
         {/* Database & Redis */}
-        <div className="hidden sm:flex items-center gap-2 text-muted border-l border-subtle pl-4">
+        <div className="hidden sm:flex items-center gap-2 text-muted border-l border-subtle pl-4" title={systemHealth.error || 'Database operational'}>
           <Database size={12} className={systemHealth.postgres === 'healthy' ? 'text-emerald-400' : 'text-rose-400'} />
-          <span>PG: <strong className={systemHealth.postgres === 'healthy' ? 'text-emerald-400' : 'text-rose-400'}>{systemHealth.postgres}</strong></span>
+          <span>PG: <strong className={systemHealth.postgres === 'healthy' ? 'text-emerald-400' : 'text-rose-400'}>{systemHealth.postgres}</strong> ({systemHealth.storageMode || 'in-memory'})</span>
           <span>Redis: <strong className={systemHealth.redis === 'healthy' ? 'text-emerald-400' : 'text-rose-400'}>{systemHealth.redis}</strong></span>
+          {systemHealth.error && (
+            <span className="text-rose-400 text-[10px] bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/30 truncate max-w-[150px]" title={systemHealth.error}>
+              Error: {systemHealth.error}
+            </span>
+          )}
         </div>
       </div>
 

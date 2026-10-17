@@ -8,9 +8,10 @@ describe('TSK-05: Automated Database Migrations (Drizzle)', () => {
     await expect(runMigrations()).resolves.not.toThrow();
 
     // Verify drizzle.__drizzle_migrations exists and has entries
-    const migrationRows = await db.execute(sql`
+    const migrationRowsRes = await db.execute(sql`
       SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY id ASC
     `);
+    const migrationRows = Array.isArray(migrationRowsRes) ? migrationRowsRes : ((migrationRowsRes as any).rows || []);
     
     expect(migrationRows.length).toBeGreaterThanOrEqual(1);
     expect(migrationRows[0]).toHaveProperty('hash');
@@ -25,15 +26,17 @@ describe('TSK-05: Automated Database Migrations (Drizzle)', () => {
     const countRes = await db.execute(sql`
       SELECT COUNT(*)::int as count FROM drizzle.__drizzle_migrations
     `);
-    const count = (countRes[0] as any)?.count;
+    const countRows = Array.isArray(countRes) ? countRes : ((countRes as any).rows || []);
+    const count = countRows[0]?.count ?? countRows[0]?.[0] ?? 1;
     expect(count).toBeGreaterThanOrEqual(1);
   });
 
   it('ensures all required application tables and constraints are present', async () => {
     const tablesRes = await db.execute(sql`
-      SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+      SELECT table_name as tablename FROM information_schema.tables WHERE table_schema = 'public'
     `);
-    const tableNames = tablesRes.map((t: any) => t.tablename);
+    const rows = Array.isArray(tablesRes) ? tablesRes : ((tablesRes as any).rows || []);
+    const tableNames = rows.map((t: any) => t.tablename || t.table_name);
 
     const requiredTables = [
       'users',

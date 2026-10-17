@@ -25,27 +25,36 @@ describe('TSK-11: Infrastructure Dependency Failure & Recovery Testing', () => {
   });
 
   it('TSK-11A: In-memory fallback handles rate limiting safely when Redis is unavailable', async () => {
+    const originalBehavior = process.env.REDIS_FAILURE_BEHAVIOR;
+    process.env.REDIS_FAILURE_BEHAVIOR = 'fail-open';
     // Mock redis status as disconnected/error
     const originalStatus = redisConnection.status;
     (redisConnection as any).status = 'end';
 
-    // 1. Initial request under fallback
-    const res1 = await checkRateLimit('proj_fail_test', 'route_test_1', 'user_ip_1');
-    expect(res1.allowed).toBe(true);
-    expect(res1.limit).toBe(20);
+    try {
+      // 1. Initial request under fallback
+      const res1 = await checkRateLimit('proj_fail_test', 'route_test_1', 'user_ip_1');
+      expect(res1.allowed).toBe(true);
+      expect(res1.limit).toBe(20);
 
-    // 2. Deplete tokens to verify rate limit enforcement even during Redis outage
-    for (let i = 0; i < 19; i++) {
-      await checkRateLimit('proj_fail_test', 'route_test_1', 'user_ip_1');
+      // 2. Deplete tokens to verify rate limit enforcement even during Redis outage
+      for (let i = 0; i < 19; i++) {
+        await checkRateLimit('proj_fail_test', 'route_test_1', 'user_ip_1');
+      }
+
+      // 21st request should be blocked by in-memory fallback
+      const resBlocked = await checkRateLimit('proj_fail_test', 'route_test_1', 'user_ip_1');
+      expect(resBlocked.allowed).toBe(false);
+      expect(resBlocked.remaining).toBe(0);
+    } finally {
+      // Restore redis status and behavior
+      (redisConnection as any).status = originalStatus;
+      if (originalBehavior !== undefined) {
+        process.env.REDIS_FAILURE_BEHAVIOR = originalBehavior;
+      } else {
+        delete process.env.REDIS_FAILURE_BEHAVIOR;
+      }
     }
-
-    // 21st request should be blocked by in-memory fallback
-    const resBlocked = await checkRateLimit('proj_fail_test', 'route_test_1', 'user_ip_1');
-    expect(resBlocked.allowed).toBe(false);
-    expect(resBlocked.remaining).toBe(0);
-
-    // Restore redis status
-    (redisConnection as any).status = originalStatus;
 
     failureMatrix.push({
       component: 'Redis (Rate Limiting)',

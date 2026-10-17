@@ -102,8 +102,8 @@ export async function generateProjectTopology(
 
   // 4. Check infrastructure dependencies health
   const health = await getDependenciesHealth();
-  const dbStatus = health.postgres.status === 'up' ? 'healthy' : 'critical';
-  const redisStatus = health.redis.status === 'up' ? 'healthy' : 'critical';
+  const dbStatus = (health.postgres.status === 'up' || health.postgres.status === 'healthy') ? 'healthy' : 'critical';
+  const redisStatus = (health.redis.status === 'up' || health.redis.status === 'healthy') ? 'healthy' : 'critical';
 
   // 5. Query real telemetry for routes in the time window
   let metrics: Array<{

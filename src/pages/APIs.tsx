@@ -2,8 +2,10 @@ import { fetchWithAuth } from "../lib/api.js";
 import React, { useEffect, useState } from 'react';
 import { Card } from '../components/ui/card.js';
 import { useOutletContext } from 'react-router-dom';
+import { useProject } from '../context/ProjectContext.js';
 
 export default function APIs() {
+  const { currentProject } = useProject();
   const [routes, setRoutes] = useState<any[]>([]);
   const [keys, setKeys] = useState<any[]>([]);
   const outletContext = useOutletContext<{ searchQuery?: string }>() || {};
@@ -19,7 +21,7 @@ export default function APIs() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const projectId = localStorage.getItem('fortix_project_id') || ''; // using seeded demo project ID
+  const projectId = currentProject?.id || localStorage.getItem('fortix_project_id') || '';
 
   const fetchData = () => {
     fetchWithAuth(`/api/control/routes?projectId=${projectId}`)
@@ -34,7 +36,7 @@ export default function APIs() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [projectId]);
 
   const createRoute = async () => {
     setErrorMsg('');

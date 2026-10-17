@@ -3,11 +3,16 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
-// Cleanly ignore benign Vite / WebSocket closure messages in iFrame preview environments
+// Cleanly ignore only the specific benign Google AI Studio / Vite preview WebSocket closure message
+// ("WebSocket closed without opened") without suppressing legitimate application runtime errors.
 if (typeof window !== 'undefined') {
+  const isBenignPreviewClosure = (text: string) => {
+    return text.includes('WebSocket closed without opened');
+  };
+
   window.addEventListener('unhandledrejection', (event) => {
     const reasonStr = String(event.reason?.message || event.reason || '');
-    if (reasonStr.includes('WebSocket') || reasonStr.includes('websocket')) {
+    if (isBenignPreviewClosure(reasonStr)) {
       event.preventDefault();
       event.stopPropagation();
     }
@@ -15,7 +20,7 @@ if (typeof window !== 'undefined') {
 
   window.addEventListener('error', (event) => {
     const msg = String(event.message || '');
-    if (msg.includes('WebSocket') || msg.includes('websocket')) {
+    if (isBenignPreviewClosure(msg)) {
       event.preventDefault();
       event.stopPropagation();
     }

@@ -4,16 +4,18 @@ import { Card } from '../components/ui/card.js';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { motion } from 'motion/react';
 import { SystemLogs } from '../components/SystemLogs.js';
+import { useProject } from '../context/ProjectContext.js';
 
 export default function Dashboard() {
+  const { currentProject } = useProject();
   const [metrics, setMetrics] = useState<any[]>([]);
   const [experiments, setExperiments] = useState<any[]>([]);
   const [scores, setScores] = useState({ securityScore: 0, resilienceScore: 0, health: 100 });
 
   useEffect(() => {
-    // Poll for metrics
+    // Fetch immediately when project changes
     let isFetching = false;
-    const interval = setInterval(async () => {
+    const fetchDashboardData = async () => {
       if (isFetching) return;
       isFetching = true;
       try {
@@ -39,9 +41,12 @@ export default function Dashboard() {
       } finally {
         isFetching = false;
       }
-    }, 2000);
+    };
+
+    fetchDashboardData();
+    const interval = setInterval(fetchDashboardData, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentProject?.id]);
 
   const activeExp = experiments.find(e => e.status === 'RUNNING' || e.status === 'ANALYZING');
 
