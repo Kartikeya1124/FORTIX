@@ -138,7 +138,18 @@ async function startServer() {
   });
 
   // Run migrations without blocking the initial TCP probe listener
-  initDatabase().catch((err) => {
+  initDatabase().then(async () => {
+    // Reconcile any abandoned workflow runs from prior process restarts/crashes
+    try {
+      const { reconcileAbandonedRuns } = await import('./src/autonomous/stateMachine.js');
+      const result = await reconcileAbandonedRuns();
+      if (result.reconciledCount > 0) {
+        console.log(`[Recovery] Reconciled ${result.reconciledCount} abandoned workflow run(s) into RECOVERY_REQUIRED:`, result.runIds);
+      }
+    } catch (recErr: any) {
+      console.warn('[Recovery] Warning during startup run reconciliation:', recErr?.message || recErr);
+    }
+  }).catch((err) => {
     console.warn('[Database] Initial startup migration warning:', err?.message || err);
   });
 

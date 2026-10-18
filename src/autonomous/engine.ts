@@ -10,9 +10,10 @@ import { analyzeRunEvidence, RunEvidenceContext } from '../ai/analyzer.js';
 import { artifactStorage } from '../storage/index.js';
 import { buildPdfBuffer } from '../api/reports.js';
 import { broadcast } from '../socket.js';
+import { transitionWorkflowStatus, WorkflowStatus } from './stateMachine.js';
 
+export type { WorkflowStatus };
 export type WorkflowProfile = 'security-audit' | 'resilience-stress' | 'failover-recovery' | 'full-verification';
-export type WorkflowStatus = 'QUEUED' | 'RUNNING' | 'VERIFYING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'RECOVERY_REQUIRED';
 
 export interface TimelineEntry {
   timestamp: string;
@@ -163,29 +164,11 @@ async function appendTimeline(runId: string, entry: TimelineEntry) {
 }
 
 /**
- * Transition state safely and idempotently.
+ * Transition state safely and idempotently via durable state machine.
  */
 async function transitionRunStatus(runId: string, status: WorkflowStatus, extraUpdates: Record<string, any> = {}) {
-  const [existing] = await db.select().from(workflowRuns).where(eq(workflowRuns.id, runId)).limit(1);
-  if (!existing) return null;
-
-  // Prevent modifying terminal states
-  if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(existing.status)) {
-    return existing;
-  }
-
-  const [updated] = await db
-    .update(workflowRuns)
-    .set({
-      status,
-      updatedAt: new Date(),
-      ...extraUpdates,
-    })
-    .where(eq(workflowRuns.id, runId))
-    .returning();
-
-  broadcast(existing.projectId, 'workflow:run:status', { runId, status });
-  return updated;
+  const result = await transitionWorkflowStatus(runId, status, { extraUpdates });
+  return result.run;
 }
 
 /**

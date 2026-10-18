@@ -4,6 +4,7 @@ import { workflowRuns, apiRoutes, projects, organizations } from '../db/schema.j
 import { eq, and, desc } from 'drizzle-orm';
 import { requireProjectOwnership } from './projects.js';
 import { createAutonomousWorkflowRun, WorkflowProfile } from '../autonomous/engine.js';
+import { transitionWorkflowStatus, InvalidStateTransitionError } from '../autonomous/stateMachine.js';
 import { z } from 'zod';
 import { artifactStorage } from '../storage/index.js';
 
@@ -126,18 +127,22 @@ router.post('/:runId/cancel', requireProjectOwnership, async (req, res) => {
       return res.status(400).json({ error: `Run is already in terminal state ${run.status}` });
     }
 
-    const [updated] = await db
-      .update(workflowRuns)
-      .set({
-        status: 'CANCELLED',
-        cleanupStatus: 'CLEANED',
-        completedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(workflowRuns.id, runId))
-      .returning();
+    try {
+      const result = await transitionWorkflowStatus(runId, 'CANCELLED', {
+        timelineMessage: 'Workflow run cancelled by operator',
+        timelineLevel: 'WARN',
+        extraUpdates: {
+          cleanupStatus: 'CLEANED',
+        },
+      });
 
-    res.json({ message: 'Run successfully cancelled and resources cleaned up', run: updated });
+      res.json({ message: 'Run successfully cancelled and resources cleaned up', run: result.run });
+    } catch (transErr: any) {
+      if (transErr instanceof InvalidStateTransitionError) {
+        return res.status(400).json({ error: transErr.message });
+      }
+      throw transErr;
+    }
   } catch (error) {
     console.error('[Runs API] Failed to cancel run:', error);
     res.status(500).json({ error: 'Failed to cancel workflow run' });
