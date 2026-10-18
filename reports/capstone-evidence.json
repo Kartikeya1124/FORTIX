@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-10-17T08:56:53.540Z",
+  "timestamp": "2026-10-18T11:29:35.056Z",
   "project": "FortiX — API Security & Resilience Gateway",
   "lifecycle": "PROTECT -> OBSERVE -> BREAK -> MEASURE -> RECOVER -> PROVE",
   "stages": {
@@ -30,9 +30,9 @@
     },
     "prove": {
       "status": "VERIFIED",
-      "artifactKey": "proj_capstone_demo_01/13db8918-8066-48e5-85fc-aaf339ff723c-verif_capstone_final_99.pdf",
-      "sha256": "9e470a13a5e387c89fd80f2d23fef7a93b1f26247fb557fe3c0c078196b97c8c",
-      "sizeBytes": 2091,
+      "artifactKey": "proj_capstone_demo_01/380f5294-39c6-424b-ad64-74ef1805bfa8-verif_capstone_final_99.pdf",
+      "sha256": "f39d7976d99369895a6925d92c78b7fc39e724815d4233554378cd79a72707f1",
+      "sizeBytes": 2093,
       "tenantIsolation": "ENFORCED"
     }
   },
