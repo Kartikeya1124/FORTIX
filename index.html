@@ -9,6 +9,17 @@
     <meta property="og:description" content="Automated resilience experimentation, real-time security telemetry, and verification gateway for mission-critical APIs." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      // Gracefully ignore disabled-HMR WebSocket connection events per AI Studio environment constraints
+      window.addEventListener('unhandledrejection', function (event) {
+        if (event && event.reason && (
+          String(event.reason.message || event.reason).includes('WebSocket closed without opened') ||
+          String(event.reason.message || event.reason).includes('failed to connect to websocket')
+        )) {
+          event.preventDefault();
+        }
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>

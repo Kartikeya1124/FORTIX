@@ -14,7 +14,6 @@ import Verifications from './pages/Verifications.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { SocketProvider } from './context/SocketContext.js';
-import { TelemetryStatusBar } from './components/TelemetryStatusBar.js';
 import { ProjectProvider, useProject } from './context/ProjectContext.js';
 import { ProjectSwitcher } from './components/ProjectSwitcher.js';
 
@@ -161,12 +160,8 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
           </div>
         </main>
         
-        <TelemetryStatusBar />
-        <footer className="px-6 py-2 border-t border-subtle bg-surface flex justify-between items-center shrink-0">
+        <footer className="px-6 py-2.5 border-t border-subtle bg-surface flex justify-between items-center shrink-0">
           <div className="text-[10px] text-muted">© 2026 Faultline Labs // FortiX Continuous Resilience & API Security Gateway</div>
-          <div className="flex gap-4">
-            <span className="text-[10px] text-muted uppercase font-bold tracking-widest font-mono">Verified Operational</span>
-          </div>
         </footer>
       </div>
     </div>

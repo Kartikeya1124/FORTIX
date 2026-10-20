@@ -10,7 +10,7 @@ import { analyzeRunEvidence, RunEvidenceContext } from '../ai/analyzer.js';
 import { artifactStorage } from '../storage/index.js';
 import { buildPdfBuffer } from '../api/reports.js';
 import { broadcast } from '../socket.js';
-import { transitionWorkflowStatus, WorkflowStatus } from './stateMachine.js';
+import { transitionWorkflowStatus, WorkflowStatus, InvalidStateTransitionError } from './stateMachine.js';
 
 export type { WorkflowStatus };
 export type WorkflowProfile = 'security-audit' | 'resilience-stress' | 'failover-recovery' | 'full-verification';
@@ -215,7 +215,15 @@ export async function executeAutonomousRun(runId: string) {
   }
 
   const startTime = new Date();
-  await transitionRunStatus(runId, 'RUNNING', { startedAt: startTime });
+  try {
+    await transitionRunStatus(runId, 'RUNNING', { startedAt: startTime });
+  } catch (err: any) {
+    if (err instanceof InvalidStateTransitionError) {
+      // Run was cancelled or transitioned concurrently before worker execution started
+      return;
+    }
+    throw err;
+  }
   await appendTimeline(runId, {
     timestamp: new Date().toISOString(),
     stage: 'RUNNING',
