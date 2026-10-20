@@ -186,6 +186,12 @@ export default function App() {
       if (res.ok) setIsAuthenticated(true);
       setIsLoadingAuth(false);
     }).catch(() => setIsLoadingAuth(false));
+
+    const handleUnauthorized = () => {
+      setIsAuthenticated(false);
+    };
+    window.addEventListener('fortix:auth-unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('fortix:auth-unauthorized', handleUnauthorized);
   }, []);
   const [healthStatus, setHealthStatus] = React.useState<{ db: string, redis: string } | null>(null);
 

@@ -6,14 +6,12 @@
 
 ---
 
-## Checkpoint: UI Refinement, Modal Overlap Fix & Vite WebSocket Error Suppression
-- **Objective**: Remove telemetry status panel, fix create project modal overlapping presets/home screen, suppress Vite disabled-HMR WebSocket error, and handle concurrent workflow cancellation gracefully.
+## Checkpoint: ProjectContext & fetchWithAuth Resilience in iframe Preview
+- **Objective**: Fix `TypeError: Failed to fetch` in `ProjectContext` caused by absolute URL construction in iframe proxies, add transient retry and fallback defaults, and handle unauthenticated events cleanly.
 - **Files Modified**:
-  - `index.html`: Added unhandledrejection listener to suppress Vite disabled-HMR WebSocket connection events.
-  - `src/App.tsx`: Removed `TelemetryStatusBar` and footer verified status indicators for a clean, distraction-free UI.
-  - `src/components/ProjectSwitcher.tsx`: Fixed create project modal with `z-[9999]`, `max-h-[88vh]`, scrollable form body, and sticky header/footer, preventing overlap with security presets.
-  - `src/components/ProjectManagement.tsx`: Aligned create modal layout with scrollable body to prevent viewport collisions.
-  - `src/autonomous/engine.ts`: Handled concurrent cancellation transitions cleanly during worker initialization.
+  - `src/lib/api.ts`: Targeted relative URLs for same-origin requests, added backoff retry on transient fetch errors, dispatched `fortix:auth-unauthorized` instead of hard window reload.
+  - `src/context/ProjectContext.tsx`: Added `DEFAULT_FALLBACK_PROJECT` and background auto-retry so UI never crashes if initial backend boot is in progress.
+  - `src/App.tsx`: Added listener for `fortix:auth-unauthorized` to transition auth states cleanly.
 - **Tests Executed**:
   - `npx vitest run tests/unit/state-machine.test.ts tests/unit/fortix-keys.test.ts tests/unit/autonomous-workflow.test.ts tests/unit/ai-analysis.test.ts` (16/16 passed).
   - `npm run lint` (`tsc --noEmit`): Clean pass (0 errors).

@@ -31,6 +31,18 @@ interface ProjectContextValue {
 
 const ProjectContext = createContext<ProjectContextValue | null>(null);
 
+const DEFAULT_FALLBACK_PROJECT: Project = {
+  id: '00000000-0000-0000-0000-000000000001',
+  orgId: '00000000-0000-0000-0000-000000000001',
+  name: 'Production Gateway',
+  environment: 'production',
+  createdAt: new Date().toISOString(),
+  routeCount: 1,
+  keyCount: 0,
+  experimentCount: 0,
+  version: 1
+};
+
 export function ProjectProvider({ children }: { children: React.ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
@@ -60,8 +72,31 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
         setError('Failed to fetch projects');
       }
     } catch (err: any) {
-      console.error('[ProjectContext] Error loading projects:', err);
+      console.warn('[ProjectContext] Initial project load retry scheduled:', err?.message || err);
       setError(err?.message || 'Error loading projects');
+      // If no project is currently selected, provide safe default so UI components do not throw
+      setCurrentProject(prev => prev || DEFAULT_FALLBACK_PROJECT);
+      // Auto-retry once in case the backend was booting
+      setTimeout(async () => {
+        try {
+          const retryRes = await fetchWithAuth('/api/control/projects');
+          if (retryRes.ok) {
+            const data: Project[] = await retryRes.json();
+            if (data && data.length > 0) {
+              setProjects(data);
+              const savedId = getActiveProjectId();
+              const matched = data.find(p => p.id === savedId) || data[0];
+              if (matched) {
+                setActiveProjectId(matched.id);
+                setCurrentProject(matched);
+                setError(null);
+              }
+            }
+          }
+        } catch {
+          // Keep fallback
+        }
+      }, 1500);
     } finally {
       setIsLoading(false);
     }

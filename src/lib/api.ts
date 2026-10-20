@@ -30,14 +30,31 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}) {
     }
   }
 
-  const response = await fetch(urlObj.toString(), {
-    ...options,
-    headers
-  });
+  // Use relative path for same-origin requests to prevent iframe proxy/CORS issues
+  const targetUrl = url.startsWith('/') ? `${urlObj.pathname}${urlObj.search}` : urlObj.toString();
+
+  let response: Response;
+  try {
+    response = await fetch(targetUrl, {
+      ...options,
+      headers
+    });
+  } catch (err: any) {
+    // If request failed due to transient server reload or connection blip, retry once after a short delay
+    if (err?.name === 'TypeError' || String(err?.message || '').toLowerCase().includes('failed to fetch')) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      response = await fetch(targetUrl, {
+        ...options,
+        headers
+      });
+    } else {
+      throw err;
+    }
+  }
   
   if (response.status === 401) {
     localStorage.removeItem('fortix_token');
-    window.location.href = '/'; // force re-login
+    window.dispatchEvent(new CustomEvent('fortix:auth-unauthorized'));
   }
   
   return response;
