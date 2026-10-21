@@ -7,7 +7,7 @@ import * as dotenv from 'dotenv';
 
 dotenv.config({ override: true });
 
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'fortix_local_dev_secret_key_32_characters_minimum_entropy');
 if (!JWT_SECRET) throw new Error("JWT_SECRET must be set");
 
 export interface AuthRequest extends Request {

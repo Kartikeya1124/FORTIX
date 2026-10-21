@@ -18,6 +18,7 @@
     "services:up": "docker compose up -d",
     "demo-api": "tsx demo-api.ts",
     "worker": "tsx src/worker.ts",
+    "setup:local": "node scripts/setup-local.js",
     "test:security": "playwright test tests/security",
     "test:e2e": "playwright test tests/e2e"
   },

@@ -1,26 +1,26 @@
 # FortiX Engineering Progress Record & Checkpoint Log
 
-- **Baseline Commit**: `6d38347cf413a330657add3d9d745d36915d1a05`
-- **Current Verified Remote HEAD**: `6d38347cf413a330657add3d9d745d36915d1a05` on `main` (`mr-vdnt/FortiX`)
+- **Baseline Commit**: `cd4a4f11a435c5dcbb1f162cc59464e4eb6a8c3c`
+- **Current Verified Remote HEAD**: `cd4a4f11a435c5dcbb1f162cc59464e4eb6a8c3c` on `main` (`mr-vdnt/FortiX`)
 - **Remote Push Status**: Verified live on GitHub `origin/main`
 
 ---
 
-## Checkpoint: BullMQ & Redis DNS Resolution Resilience & EAI_AGAIN Handling
-- **Objective**: Fix recurring `getaddrinfo EAI_AGAIN` error spammed across BullMQ workers caused by private Render internal hostnames (`red-...`) injected into `process.env.REDIS_URL`; sanitize Redis URL to fallback to local loopback; handle benign DNS/connection errors gracefully across all BullMQ queues and workers.
-- **Files Modified**:
-  - `src/redis.ts`: Sanitized `REDIS_URL` to filter unresolvable cloud internal VPC hostnames (`red-*`), and added handler to ignore transient lookup errors.
-  - `src/worker.ts`: Filtered unresolvable private hostnames in `getRedisConnectionConfig()`, implemented `isBenignConnectionError()` covering `EAI_AGAIN`, `ENOTFOUND`, `ECONNREFUSED`, and applied across all BullMQ queues and workers.
-  - `src/telemetry-worker.ts`: Handled DNS and transient connection errors gracefully in telemetry batch loop.
+## Checkpoint: Free Local Secret Auto-Generation & Zero-Config Local Standalone Support
+- **Objective**: Clarify that secret values (`JWT_SECRET`, `ENCRYPTION_KEY`, `POSTGRES_PASSWORD`) are 100% free and generated locally on the user's computer with no paid services or third-party accounts; provide automated `npm run setup:local` script (`scripts/setup-local.js`) to generate local `.env` with random cryptographic keys; provide built-in dev fallback in `src/middleware/auth.ts` and `src/api/auth.ts` for out-of-the-box zero-config execution.
+- **Files Modified / Created**:
+  - `scripts/setup-local.js`: Automated 1-command generator creating `.env` with fresh 256-bit secrets via Node `crypto.randomBytes()`.
+  - `package.json`: Added `"setup:local": "node scripts/setup-local.js"`.
+  - `src/middleware/auth.ts`: Added local development fallback secret if `JWT_SECRET` is unset in non-production.
+  - `src/api/auth.ts`: Added local development fallback secret if `JWT_SECRET` is unset in non-production.
 - **Tests Executed**:
   - `npx vitest run tests/unit/state-machine.test.ts tests/unit/fortix-keys.test.ts tests/unit/autonomous-workflow.test.ts tests/unit/ai-analysis.test.ts tests/unit/migrations.test.ts`: **5 passed (5/5 suites), 20 passed (20/20 tests)**, 0 failed.
   - `npm run lint` (`tsc --noEmit`): **Clean pass** (0 errors).
   - `compile_applet`: **Build succeeded**.
-  - `curl http://localhost:3000/api/health/ready`: **200 OK** (`{"status":"ok","postgres":"healthy","redis":"healthy"}`).
+  - `curl http://localhost:3000/api/health/ready`: **200 OK**.
 - **Security & Secret Scan**:
   - Verified 0 secrets, credentials, or tokens in git diff or code files.
 - **Next Action**:
-  - Commit and push checkpoint immediately to GitHub `origin/main`.
 - **Environment Status & Blockers**:
   - AI Studio sandbox container does not have a nested Docker daemon (`docker: not found`). Full multi-container Docker staging verification must be executed on a Docker-capable host using the documented reproducible compose command:
     ```bash
