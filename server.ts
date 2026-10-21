@@ -1,7 +1,19 @@
-import './demo-api.js';
-import './src/worker.js';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+
+// Start internal background queue workers only if enabled (defaults to true for standalone/dev, false for multi-process worker setups)
+if (process.env.START_INTERNAL_WORKER !== 'false') {
+  import('./src/worker.js').catch(err => {
+    console.warn('[Worker] Internal worker startup warning:', err?.message || err);
+  });
+}
+
+// Start demo upstream API only if enabled (defaults to true for development)
+if (process.env.START_DEMO_API !== 'false') {
+  import('./demo-api.js').catch(err => {
+    console.warn('[DemoApi] Demo API startup warning:', err?.message || err);
+  });
+}
 import path from 'path';
 import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
@@ -150,7 +162,11 @@ async function startServer() {
       console.warn('[Recovery] Warning during startup run reconciliation:', recErr?.message || recErr);
     }
   }).catch((err) => {
-    console.warn('[Database] Initial startup migration warning:', err?.message || err);
+    console.error('[Database] Fatal startup migration error:', err?.message || err);
+    if (process.env.NODE_ENV === 'production' || process.env.STRICT_PERSISTENT_DB === 'true') {
+      console.error('[Database] STRICT_PERSISTENT_DB or production mode is active. Process exiting due to unapplied migrations.');
+      process.exit(1);
+    }
   });
 
   // Graceful shutdown

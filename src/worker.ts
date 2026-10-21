@@ -9,10 +9,28 @@ import { logger } from './lib/logger.js';
 import { processTelemetryBatch } from './telemetry-worker.js';
 import { executeWebhookDelivery } from './lib/webhooks.js';
 
-const redisConnection = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-};
+function getRedisConnectionConfig() {
+  if (process.env.REDIS_URL) {
+    try {
+      const url = new URL(process.env.REDIS_URL);
+      return {
+        host: url.hostname || 'localhost',
+        port: parseInt(url.port || '6379', 10),
+        password: url.password || undefined,
+        username: url.username || undefined,
+        db: url.pathname && url.pathname.length > 1 ? parseInt(url.pathname.replace('/', ''), 10) : 0,
+      };
+    } catch {
+      // fallback to host/port
+    }
+  }
+  return {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+  };
+}
+
+const redisConnection = getRedisConnectionConfig();
 
 const cleanupQueue = new Queue('cleanup', { connection: redisConnection as any });
 registerQueue('cleanup', cleanupQueue);

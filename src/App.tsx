@@ -51,38 +51,38 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
         )}
 
         {/* Header */}
-        <header className="flex items-center justify-between px-4 md:px-6 py-4 border-b border-subtle bg-surface shrink-0">
-          <div className="flex items-center gap-3 md:gap-4">
+        <header className="flex items-center justify-between px-3 sm:px-4 md:px-6 py-3.5 border-b border-subtle bg-surface shrink-0 gap-2 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-3 md:gap-4 min-w-0 shrink">
             <button 
-              className="md:hidden text-muted hover:text-strong transition"
+              className="md:hidden text-muted hover:text-strong transition shrink-0"
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             >
-              {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
+              {isSidebarOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
-            <div className="flex items-center justify-center w-8 h-8 md:w-10 md:h-10 rounded-xl bg-primary text-inverted font-bold text-lg md:text-xl shrink-0">FX</div>
-            <div className="hidden sm:block">
-              <h1 className="text-lg font-bold tracking-tight text-strong leading-none uppercase">
-                FortiX <span className="text-primary text-xs align-top ml-1">GATEWAY V1</span>
+            <div className="flex items-center justify-center w-8 h-8 md:w-9 md:h-9 rounded-xl bg-primary text-inverted font-bold text-base md:text-lg shrink-0">FX</div>
+            <div className="hidden lg:block shrink-0">
+              <h1 className="text-base font-bold tracking-tight text-strong leading-none uppercase">
+                FortiX <span className="text-primary text-[10px] align-top ml-0.5">GATEWAY</span>
               </h1>
             </div>
-            {/* Desktop Project Switcher */}
-            <div className="hidden sm:block ml-2 pl-3 border-l border-subtle">
+            {/* Desktop Project Switcher with flexbox and responsive max-width */}
+            <div className="hidden sm:block ml-1 sm:ml-2 pl-2 sm:pl-3 border-l border-subtle min-w-0 max-w-[180px] md:max-w-[220px] lg:max-w-[260px]">
               <ProjectSwitcher />
             </div>
           </div>
           
-          {/* Global Search Bar */}
-          <div className="flex-1 max-w-md mx-4 md:mx-8">
+          {/* Global Search Bar with responsive flex sizing */}
+          <div className="flex-1 min-w-[100px] max-w-xs sm:max-w-sm md:max-w-md mx-1 sm:mx-2 md:mx-4">
             <input 
               type="text" 
               placeholder="Search or jump to... (Ctrl+K)" 
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full bg-base border border-subtle text-sm text-strong px-4 py-2 rounded-xl focus:outline-none focus:border-primary transition-colors"
+              className="w-full bg-base border border-subtle text-xs sm:text-sm text-strong px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl focus:outline-none focus:border-primary transition-colors truncate"
             />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             {/* Mobile Project Switcher */}
             <div className="sm:hidden">
               <ProjectSwitcher />

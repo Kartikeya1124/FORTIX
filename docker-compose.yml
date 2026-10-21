@@ -3,22 +3,24 @@ version: '3.8'
 services:
   postgres:
     image: postgres:15-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: fortix
-      POSTGRES_PASSWORD: fortixpassword
-      POSTGRES_DB: fortix_db
+      POSTGRES_USER: ${POSTGRES_USER:-fortix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be provided}
+      POSTGRES_DB: ${POSTGRES_DB:-fortix_db}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fortix -d fortix_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fortix} -d ${POSTGRES_DB:-fortix_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: redis-server --appendonly yes
     ports:
       - "6379:6379"
@@ -30,21 +32,24 @@ services:
       timeout: 5s
       retries: 5
 
-  fortix:
+  api:
     build:
       context: .
       dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
       - PORT=3000
       - STRICT_PERSISTENT_DB=true
-      - DATABASE_URL=${DATABASE_URL:-postgres://fortix:fortixpassword@postgres:5432/fortix_db}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - START_INTERNAL_WORKER=false
+      - START_DEMO_API=false
+      - DATABASE_URL=postgres://${POSTGRES_USER:-fortix}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/${POSTGRES_DB:-fortix_db}
+      - REDIS_URL=redis://redis:6379
       - REDIS_FAILURE_BEHAVIOR=fail-closed
-      - JWT_SECRET=${JWT_SECRET:-fx_staging_sec_9f81a7b6c5d4e3f201a9b8c7d6e5f4a3}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set (min 32 characters, high entropy)}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set (32 bytes hex)}
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,7 +60,33 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
+    command: ["node", "--loader", "tsx", "src/worker.ts"]
+    environment:
+      - NODE_ENV=production
+      - STRICT_PERSISTENT_DB=true
+      - DATABASE_URL=postgres://${POSTGRES_USER:-fortix}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/${POSTGRES_DB:-fortix_db}
+      - REDIS_URL=redis://redis:6379
+      - REDIS_FAILURE_BEHAVIOR=fail-closed
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
     deploy:
       resources:
         limits:

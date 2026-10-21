@@ -96,23 +96,23 @@ export function ProjectSwitcher() {
   const activeEnv = getEnvironmentBadge(currentProject?.environment || 'development');
 
   return (
-    <div className="relative" ref={dropdownRef}>
-      {/* Trigger Button */}
+    <div className="relative min-w-0 max-w-[180px] sm:max-w-[220px] md:max-w-[260px] lg:max-w-[280px]" ref={dropdownRef}>
+      {/* Trigger Button with responsive flex constraints */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl border border-subtle bg-base hover:bg-hover hover:border-primary/40 text-strong transition-all duration-150 focus:outline-none focus:ring-1 focus:ring-primary/50 text-left shrink-0 shadow-sm"
+        className="flex items-center gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-1.5 rounded-xl border border-subtle bg-base hover:bg-hover hover:border-primary/40 text-strong transition-all duration-150 focus:outline-none focus:ring-1 focus:ring-primary/50 text-left w-full min-w-0 shadow-sm"
         title="Switch active API project"
       >
         <div className="flex items-center justify-center w-6 h-6 rounded-lg bg-surface border border-subtle text-primary shrink-0">
           <FolderKanban size={13} />
         </div>
-        <div className="flex flex-col min-w-[100px] max-w-[180px]">
+        <div className="flex flex-col min-w-0 flex-1">
           <span className="text-[10px] uppercase font-bold text-muted tracking-wider leading-none">Project</span>
-          <span className="text-xs font-semibold text-strong truncate mt-0.5">
+          <span className="text-xs font-semibold text-strong truncate mt-0.5 block">
             {isLoading ? 'Loading...' : currentProject ? currentProject.name : 'Select Project'}
           </span>
         </div>
-        <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border leading-none shrink-0 ${activeEnv.badgeClass}`}>
+        <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border leading-none shrink-0 hidden xs:inline-block ${activeEnv.badgeClass}`}>
           {activeEnv.label}
         </span>
         <ChevronDown size={14} className={`text-muted transition-transform duration-200 shrink-0 ${isOpen ? 'rotate-180 text-primary' : ''}`} />

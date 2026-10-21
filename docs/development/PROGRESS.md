@@ -1,22 +1,34 @@
 # FortiX Engineering Progress Record & Checkpoint Log
 
-- **Current Verified Commit**: `da9b96d6bbeb734d66fabe898a667ae32100d461`
-- **Branch**: `main` (`mr-vdnt/FortiX`)
+- **Baseline Commit**: `d49d068986d4c6478376d18bbf31af54d25e7484`
+- **Current Verified Remote HEAD**: `d49d068986d4c6478376d18bbf31af54d25e7484` on `main` (`mr-vdnt/FortiX`)
 - **Remote Push Status**: Verified live on GitHub `origin/main`
 
 ---
 
-## Checkpoint: ProjectContext & fetchWithAuth Resilience in iframe Preview
-- **Objective**: Fix `TypeError: Failed to fetch` in `ProjectContext` caused by absolute URL construction in iframe proxies, add transient retry and fallback defaults, and handle unauthenticated events cleanly.
+## Checkpoint: Header ProjectSwitcher Flexbox Alignment & P0 Docker Staging Readiness Hardening
+- **Objective**: Fix ProjectSwitcher header layout with flexbox alignment and responsive width constraints to eliminate collisions; remove hardcoded secrets and fallback credentials from `docker-compose.yml`; separate API server and worker services; harden database migration error handling in strict mode; update `.env.example` with cryptographically secure secret generation guidance.
 - **Files Modified**:
-  - `src/lib/api.ts`: Targeted relative URLs for same-origin requests, added backoff retry on transient fetch errors, dispatched `fortix:auth-unauthorized` instead of hard window reload.
-  - `src/context/ProjectContext.tsx`: Added `DEFAULT_FALLBACK_PROJECT` and background auto-retry so UI never crashes if initial backend boot is in progress.
-  - `src/App.tsx`: Added listener for `fortix:auth-unauthorized` to transition auth states cleanly.
+  - `src/App.tsx`: Applied flexbox alignment (`min-w-0`, `shrink`), responsive width constraints (`max-w-[180px] md:max-w-[220px] lg:max-w-[260px]`), and adjusted search bar padding and truncation.
+  - `src/components/ProjectSwitcher.tsx`: Added responsive max-width, flexbox text truncation (`truncate`, `block`), and responsive badges.
+  - `docker-compose.yml`: Removed hard-coded fallback secrets and passwords; enforced required environment variable substitution (`:?`); separated `api` HTTP service from dedicated `worker` service; configured container readiness healthchecks on `/health/ready`.
+  - `.env.example`: Documented non-secret configuration template with explicit guidance on generating high-entropy 32+ character secrets via `openssl rand -hex 32`.
+  - `src/worker.ts`: Updated Redis connection parser to support `REDIS_URL` in Docker and staging environments.
+  - `server.ts`: Made background worker and demo-api imports conditional on `START_INTERNAL_WORKER` and `START_DEMO_API`; enforced fatal process exit on migration errors when `STRICT_PERSISTENT_DB` or production mode is active.
+  - `src/db/init.ts`: Threw fatal error on migration failure in strict/production mode.
 - **Tests Executed**:
-  - `npx vitest run tests/unit/state-machine.test.ts tests/unit/fortix-keys.test.ts tests/unit/autonomous-workflow.test.ts tests/unit/ai-analysis.test.ts` (16/16 passed).
-  - `npm run lint` (`tsc --noEmit`): Clean pass (0 errors).
-  - `compile_applet`: Build succeeded.
+  - `npx vitest run tests/unit/state-machine.test.ts tests/unit/fortix-keys.test.ts tests/unit/autonomous-workflow.test.ts tests/unit/ai-analysis.test.ts tests/unit/migrations.test.ts`: **5 passed (5/5 suites), 20 passed (20/20 tests)**, 0 failed.
+  - `npm run lint` (`tsc --noEmit`): **Clean pass** (0 errors).
+  - `compile_applet`: **Build succeeded**.
+- **Environment Status & Blockers**:
+  - AI Studio sandbox container does not have a nested Docker daemon (`docker: not found`). Full multi-container Docker staging verification must be executed on a Docker-capable host using the documented reproducible compose command:
+    ```bash
+    export POSTGRES_PASSWORD=$(openssl rand -hex 16)
+    export JWT_SECRET=$(openssl rand -hex 32)
+    export ENCRYPTION_KEY=$(openssl rand -hex 32)
+    docker compose up --build -d
+    ```
 - **Security & Secret Scan**:
-  - Zero secrets or credentials in git diff or code files.
+  - Verified 0 secrets, credentials, or tokens in git diff or code files.
 - **Next Action**:
-  - Commit and push checkpoint immediately to GitHub `origin/main`.
+  - Commit and push checkpoint to GitHub `origin/main`, verify remote SHA, and rehearse end-to-end API key verification on external Docker host.
