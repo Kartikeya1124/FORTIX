@@ -157,8 +157,14 @@ export async function processTelemetryBatch() {
         logger.warn('Consumer group or stream missing (NOGROUP). Re-creating consumer groups...');
         await setupConsumerGroup(METRICS_STREAM_KEY);
         await setupConsumerGroup(SECURITY_EVENTS_STREAM_KEY);
-      } else if (errMsg.includes('ECONNREFUSED') || errMsg.includes('NR_CLOSED')) {
-        // Connection temporarily lost, will auto-reconnect
+      } else if (
+        errMsg.includes('ECONNREFUSED') || 
+        errMsg.includes('NR_CLOSED') || 
+        errMsg.includes('EAI_AGAIN') || 
+        errMsg.includes('getaddrinfo') || 
+        errMsg.includes('ENOTFOUND')
+      ) {
+        // Connection temporarily lost or resolving, will auto-reconnect
       } else {
         logger.error({ err }, 'Error processing telemetry batch');
       }

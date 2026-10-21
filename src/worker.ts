@@ -10,24 +10,56 @@ import { processTelemetryBatch } from './telemetry-worker.js';
 import { executeWebhookDelivery } from './lib/webhooks.js';
 
 function getRedisConnectionConfig() {
-  if (process.env.REDIS_URL) {
+  const rawUrl = process.env.REDIS_URL || '';
+  // Filter out unresolvable private cloud internal hostnames (e.g. Render internal 'red-...') outside their VPC
+  const isRenderInternal = rawUrl.includes('red-') && !rawUrl.includes('.render.com');
+
+  if (rawUrl && !isRenderInternal) {
     try {
-      const url = new URL(process.env.REDIS_URL);
+      const url = new URL(rawUrl);
       return {
-        host: url.hostname || 'localhost',
+        host: url.hostname || '127.0.0.1',
         port: parseInt(url.port || '6379', 10),
         password: url.password || undefined,
         username: url.username || undefined,
         db: url.pathname && url.pathname.length > 1 ? parseInt(url.pathname.replace('/', ''), 10) : 0,
+        maxRetriesPerRequest: null,
+        enableOfflineQueue: false,
+        retryStrategy(times: number) {
+          return Math.min(times * 1000, 15000);
+        }
       };
     } catch {
       // fallback to host/port
     }
   }
   return {
-    host: process.env.REDIS_HOST || 'localhost',
+    host: process.env.REDIS_HOST || '127.0.0.1',
     port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    maxRetriesPerRequest: null,
+    enableOfflineQueue: false,
+    retryStrategy(times: number) {
+      return Math.min(times * 1000, 15000);
+    }
   };
+}
+
+export function isBenignConnectionError(err: any): boolean {
+  if (!err) return false;
+  const msg = String(err.message || '');
+  const code = String(err.code || '');
+  return (
+    code === 'ECONNREFUSED' ||
+    code === 'EAI_AGAIN' ||
+    code === 'ENOTFOUND' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EHOSTUNREACH' ||
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('EAI_AGAIN') ||
+    msg.includes('getaddrinfo') ||
+    msg.includes('ENOTFOUND') ||
+    msg.includes('ETIMEDOUT')
+  );
 }
 
 const redisConnection = getRedisConnectionConfig();
@@ -36,7 +68,7 @@ const cleanupQueue = new Queue('cleanup', { connection: redisConnection as any }
 registerQueue('cleanup', cleanupQueue);
 
 cleanupQueue.on('error', (err: any) => {
-  if (err?.message?.includes('ECONNREFUSED')) return;
+  if (isBenignConnectionError(err)) return;
   logger.error({ err }, '[BullMQ cleanupQueue] Error');
 });
 
@@ -47,7 +79,7 @@ const experimentWorker = new Worker('experiments', async job => {
 }, { connection: redisConnection as any });
 
 experimentWorker.on('error', (err: any) => {
-  if (err?.message?.includes('ECONNREFUSED')) return;
+  if (isBenignConnectionError(err)) return;
   logger.error({ err }, '[BullMQ experimentWorker] Error');
 });
 
@@ -87,7 +119,7 @@ const webhookWorker = new Worker('fortix-webhooks', async job => {
 }, { connection: redisConnection as any });
 
 webhookWorker.on('error', (err: any) => {
-  if (err?.message?.includes('ECONNREFUSED')) return;
+  if (isBenignConnectionError(err)) return;
   logger.error({ err }, '[BullMQ webhookWorker] Error');
 });
 
@@ -139,7 +171,7 @@ const cleanupWorker = new Worker('cleanup', async job => {
 }, { connection: redisConnection as any });
 
 cleanupWorker.on('error', (err: any) => {
-  if (err?.message?.includes('ECONNREFUSED')) return;
+  if (isBenignConnectionError(err)) return;
   logger.error({ err }, '[BullMQ cleanupWorker] Error');
 });
 
@@ -166,5 +198,6 @@ logger.info('BullMQ workers initialized with DLQ failure routing');
 
 // Start the telemetry ingestion loop
 processTelemetryBatch().catch((err) => {
+  if (isBenignConnectionError(err)) return;
   logger.error({ err }, 'Telemetry ingestion loop error');
 });

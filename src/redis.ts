@@ -13,7 +13,10 @@ try {
   isRedisDaemonRunning = false;
 }
 
-const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+const rawRedisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+// Filter out unresolvable private cloud internal hostnames (e.g., Render internal 'red-...') outside their VPC
+const isRenderInternal = rawRedisUrl.includes('red-') && !rawRedisUrl.includes('.render.com');
+const redisUrl = isRenderInternal ? 'redis://127.0.0.1:6379' : rawRedisUrl;
 
 // Shared in-memory mock instance for fallback
 const sharedMock = new RedisMock();
@@ -91,10 +94,18 @@ function createRedisConnection(): Redis {
     });
 
     client.on('error', (err: any) => {
-      if (err?.message && err.message.includes('ECONNREFUSED')) {
-        try {
-          exec('which redis-server >/dev/null 2>&1 && redis-server --daemonize yes', () => {});
-        } catch (e) {}
+      const msg = err?.message || '';
+      const code = err?.code || '';
+      if (
+        code === 'ECONNREFUSED' ||
+        code === 'EAI_AGAIN' ||
+        code === 'ENOTFOUND' ||
+        code === 'ETIMEDOUT' ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('EAI_AGAIN') ||
+        msg.includes('getaddrinfo') ||
+        msg.includes('ENOTFOUND')
+      ) {
         return;
       }
       console.error('[Redis] Error:', err?.message || err);
