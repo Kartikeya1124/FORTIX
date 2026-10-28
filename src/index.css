@@ -1,18 +1,22 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
   --color-base: var(--bg-base);
   --color-surface: var(--bg-surface);
   --color-elevated: var(--bg-elevated);
   --color-card: var(--bg-card);
   --color-hover: var(--bg-hover);
   --color-hover-strong: var(--bg-hover-strong);
-  
+
   --color-border-subtle: var(--border-subtle);
   --color-border-strong: var(--border-strong);
   --color-primary: var(--primary);
   --color-primary-hover: var(--primary-hover);
-  
+
   --color-inverted: var(--text-inverted);
   --color-muted: var(--text-muted);
   --color-base-text: var(--text-base);
@@ -21,67 +25,108 @@
 
 @layer base {
   body {
-    background-color: #f7f5f2;
-    background-image: 
-        radial-gradient(at 15% 15%, rgba(240, 225, 215, 0.9) 0%, transparent 50%), 
-        radial-gradient(at 85% 20%, rgba(215, 230, 240, 0.7) 0%, transparent 50%), 
-        radial-gradient(at 50% 85%, rgba(250, 240, 225, 0.95) 0%, transparent 50%);
+    background-color: #f4f5f7;
+    background-image:
+      radial-gradient(at 15% 15%, rgba(242, 125, 38, 0.08) 0%, transparent 50%),
+      radial-gradient(at 85% 20%, rgba(56, 189, 248, 0.08) 0%, transparent 50%),
+      radial-gradient(at 50% 85%, rgba(241, 245, 249, 0.95) 0%, transparent 50%);
     background-attachment: fixed;
     background-size: cover;
+    color: var(--text-base);
   }
-  
+
+  .dark {
+    color-scheme: dark;
+  }
+
   .dark body {
-    background-color: #0c0b0b;
-    background-image: 
-        radial-gradient(at 15% 15%, rgba(65, 45, 35, 0.4) 0%, transparent 50%), 
-        radial-gradient(at 85% 20%, rgba(35, 55, 65, 0.35) 0%, transparent 50%), 
-        radial-gradient(at 50% 85%, rgba(25, 30, 35, 0.5) 0%, transparent 50%);
+    background-color: #090b10;
+    background-image:
+      radial-gradient(at 15% 12%, rgba(242, 125, 38, 0.12) 0%, transparent 45%),
+      radial-gradient(at 85% 18%, rgba(30, 58, 95, 0.25) 0%, transparent 50%),
+      radial-gradient(at 50% 90%, rgba(17, 24, 39, 0.75) 0%, transparent 55%);
     background-attachment: fixed;
     background-size: cover;
+    color: var(--text-base);
   }
 
   :root {
-    --bg-base: transparent;
-    --bg-surface: rgba(255, 255, 255, 0.45);
-    --bg-elevated: rgba(255, 255, 255, 0.65);
-    --bg-card: rgba(255, 255, 255, 0.5);
-    --bg-hover: rgba(255, 255, 255, 0.8);
-    --bg-hover-strong: rgba(255, 255, 255, 0.95);
-    --border-subtle: rgba(255, 255, 255, 0.4);
-    --border-strong: rgba(255, 255, 255, 0.6);
+    --bg-base: rgba(255, 255, 255, 0.85);
+    --bg-surface: rgba(255, 255, 255, 0.88);
+    --bg-elevated: rgba(255, 255, 255, 0.95);
+    --bg-card: rgba(255, 255, 255, 0.84);
+    --bg-hover: rgba(15, 23, 42, 0.05);
+    --bg-hover-strong: rgba(15, 23, 42, 0.09);
+    --border-subtle: rgba(15, 23, 42, 0.12);
+    --border-strong: rgba(15, 23, 42, 0.22);
     --primary: #F27D26;
     --primary-hover: #E06C15;
     --text-inverted: #ffffff;
-    --text-muted: rgba(0, 0, 0, 0.6);
-    --text-base: rgba(0, 0, 0, 0.85);
-    --text-strong: #111827;
-    --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.05);
-    --shadow-glass-elevated: 0 12px 48px 0 rgba(0, 0, 0, 0.08);
+    --text-muted: #52525b;
+    --text-base: #18181b;
+    --text-strong: #09090b;
+    --shadow-glass: 0 8px 32px 0 rgba(15, 23, 42, 0.06);
+    --shadow-glass-elevated: 0 14px 48px 0 rgba(15, 23, 42, 0.1);
   }
-  
+
   .dark {
-    --bg-base: transparent;
-    --bg-surface: rgba(18, 18, 20, 0.35);
-    --bg-elevated: rgba(24, 24, 28, 0.45);
-    --bg-card: rgba(255, 255, 255, 0.03);
-    --bg-hover: rgba(255, 255, 255, 0.08);
+    --bg-base: rgba(13, 15, 22, 0.9);
+    --bg-surface: rgba(18, 21, 30, 0.9);
+    --bg-elevated: rgba(24, 28, 39, 0.95);
+    --bg-card: rgba(20, 23, 33, 0.86);
+    --bg-hover: rgba(255, 255, 255, 0.07);
     --bg-hover-strong: rgba(255, 255, 255, 0.12);
-    --border-subtle: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.15);
+    --border-subtle: rgba(255, 255, 255, 0.14);
+    --border-strong: rgba(255, 255, 255, 0.24);
     --primary: #F27D26;
     --primary-hover: #E06C15;
-    --text-inverted: #0A0A0B;
-    --text-muted: rgba(255, 255, 255, 0.5);
-    --text-base: rgba(255, 255, 255, 0.85);
-    --text-strong: #ffffff;
-    --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
-    --shadow-glass-elevated: 0 12px 48px 0 rgba(0, 0, 0, 0.5);
+    --text-inverted: #090b10;
+    --text-muted: #a1a1aa;
+    --text-base: #e4e4e7;
+    --text-strong: #f8fafc;
+    --shadow-glass: 0 10px 34px 0 rgba(0, 0, 0, 0.45);
+    --shadow-glass-elevated: 0 16px 52px 0 rgba(0, 0, 0, 0.65);
+  }
+
+  /* Ensure form inputs and native select options remain unmistakably visible in both modes */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    color: var(--text-strong);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-muted);
+    opacity: 0.78;
+  }
+
+  .dark select option {
+    background-color: #141722;
+    color: #f8fafc;
+  }
+
+  select option {
+    background-color: #ffffff;
+    color: #09090b;
   }
 }
 
 @layer utilities {
   .border-subtle { border-color: var(--border-subtle); }
   .border-strong { border-color: var(--border-strong); }
+}
+
+@keyframes fortix-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-6px); }
+  80% { transform: translateX(6px); }
+}
+
+.animate-shake {
+  animation: fortix-shake 0.36s cubic-bezier(0.36, 0.07, 0.19, 0.97);
 }
 
 /* Glassmorphism System Application */
@@ -102,7 +147,7 @@
 .bg-surface, .bg-elevated, .bg-card {
   position: relative;
 }
-.bg-surface::before, .bg-elevated::before, .bg-card::before {
+.bg-surface::before, .bg-elevated::before, .dark .bg-card::before {
   content: '';
   position: absolute;
   top: 0;
@@ -111,10 +156,10 @@
   bottom: 0;
   border-radius: inherit;
   pointer-events: none;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   mask-image: linear-gradient(135deg, black 0%, transparent 50%);
   -webkit-mask-image: linear-gradient(135deg, black 0%, transparent 50%);
 }
 .dark .bg-surface::before, .dark .bg-elevated::before, .dark .bg-card::before {
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }

@@ -18,20 +18,18 @@ import { SocketProvider } from './context/SocketContext.js';
 import { ProjectProvider, useProject } from './context/ProjectContext.js';
 import { ProjectSwitcher } from './components/ProjectSwitcher.js';
 
-function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } | null }) {
+function Layout({
+  healthStatus,
+  theme,
+  setTheme
+}: {
+  healthStatus: { db: string; redis: string } | null;
+  theme: string;
+  setTheme: React.Dispatch<React.SetStateAction<string>>;
+}) {
   const [searchQuery, setSearchQuery] = React.useState('');
   const navigate = useNavigate();
   const location = useLocation();
-  const [theme, setTheme] = React.useState(() => localStorage.getItem("fortix_theme") || "light");
-
-  React.useEffect(() => {
-    if (theme === "dark") {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-    localStorage.setItem("fortix_theme", theme);
-  }, [theme]);
 
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = React.useState(false);
@@ -86,7 +84,7 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
                   navigate(`/directory?q=${encodeURIComponent(searchQuery.trim())}`);
                 }
               }}
-              className="w-full bg-base border border-subtle text-xs sm:text-sm text-strong px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl focus:outline-none focus:border-primary transition-colors truncate"
+              className="w-full bg-white dark:bg-[#0d1017] border border-zinc-300 dark:border-white/20 text-xs sm:text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-500 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl focus:outline-none focus:border-primary transition-colors truncate"
             />
           </div>
 
@@ -170,7 +168,7 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
         </main>
 
         <footer className="px-6 py-2.5 border-t border-subtle bg-surface flex justify-between items-center shrink-0">
-          <div className="text-[10px] text-muted">© 2026 Faultline Labs // FortiX Continuous Resilience & API Security Gateway</div>
+          <div className="text-[11px] text-muted">© 2026 Faultline Labs · FortiX Continuous Resilience & API Security Gateway</div>
         </footer>
       </div>
     </div>
@@ -197,6 +195,17 @@ function NavItem({ to, icon, label, active, onClick }: { to: string, icon: React
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = React.useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = React.useState(true);
+  const [theme, setTheme] = React.useState(() => localStorage.getItem('fortix_theme_v2') || 'dark');
+
+  React.useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('fortix_theme_v2', theme);
+    localStorage.setItem('fortix_theme', theme);
+  }, [theme]);
 
   React.useEffect(() => {
     fetch('/api/auth/me', { headers: { 'X-Fortix-Token': localStorage.getItem('fortix_token') || '' } }).then(res => {
@@ -236,20 +245,26 @@ export default function App() {
     return () => clearInterval(intervalId);
   }, []);
 
-  if (isLoadingAuth) return <div className="flex h-screen w-full items-center justify-center bg-base text-muted">Loading FortiX...</div>;
+  if (isLoadingAuth) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[#090b10] text-zinc-400 font-sans text-sm">
+        Loading FortiX Gateway...
+      </div>
+    );
+  }
 
   if (!isAuthenticated) return (
-    <>
+    <div className="dark min-h-screen w-full bg-[#090b10] text-zinc-100 relative">
       {healthStatus && (healthStatus.db === 'error' || healthStatus.redis === 'error') && (
-        <div className="bg-red-900/40 text-red-400 text-xs md:text-sm font-bold px-4 py-2 text-center border-b border-red-500/50 flex items-center justify-center gap-2 absolute top-0 w-full z-50">
+        <div className="bg-red-950/90 text-red-300 text-xs md:text-sm font-semibold px-4 py-2.5 text-center border-b border-red-500/40 flex items-center justify-center gap-2 fixed top-0 inset-x-0 z-50 backdrop-blur-md">
           <AlertTriangle size={16} />
           <span>
-            SYSTEM DEGRADED: {healthStatus.db === 'error' ? 'PostgreSQL' : ''} {healthStatus.db === 'error' && healthStatus.redis === 'error' ? 'and' : ''} {healthStatus.redis === 'error' ? 'Redis' : ''} {healthStatus.db === 'error' && healthStatus.redis === 'error' ? 'are' : 'is'} currently unavailable.
+            System degraded: {healthStatus.db === 'error' ? 'PostgreSQL' : ''} {healthStatus.db === 'error' && healthStatus.redis === 'error' ? 'and' : ''} {healthStatus.redis === 'error' ? 'Redis' : ''} {healthStatus.db === 'error' && healthStatus.redis === 'error' ? 'are' : 'is'} currently unavailable.
           </span>
         </div>
       )}
       <Login onLogin={() => setIsAuthenticated(true)} />
-    </>
+    </div>
   );
 
 function SocketWrapper({ children }: { children: React.ReactNode }) {
@@ -266,7 +281,7 @@ function SocketWrapper({ children }: { children: React.ReactNode }) {
       <ProjectProvider>
         <SocketWrapper>
           <Routes>
-            <Route path="/" element={<Layout healthStatus={healthStatus} />}>
+            <Route path="/" element={<Layout healthStatus={healthStatus} theme={theme} setTheme={setTheme} />}>
               <Route index element={<Dashboard />} />
               <Route path="apis" element={<APIs />} />
               <Route path="directory" element={<PublicApiDirectory />} />

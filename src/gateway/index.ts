@@ -2,7 +2,7 @@ import { logger } from '../lib/logger.js';
 import { Express, Request, Response, NextFunction } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { db } from '../db/index.js';
-import { apiRoutes, apiKeys, metricLogs, securityEvents, experiments } from '../db/schema.js';
+import { apiRoutes, apiKeys, metricLogs, securityEvents, experiments, securityPolicies } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { isSafeTarget } from './ssrf.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -170,7 +170,38 @@ export function setupGateway(app: Express) {
         
         apiKeyId = validKey.id;
 
-      // 4. Threat Detection
+      // 4. Route-Level Security Policy Lookup (WAF & Deep Parameter SSRF Inspection)
+      const [routePolicy] = await db.select().from(securityPolicies).where(eq(securityPolicies.routeId, routeId)).limit(1);
+
+      if (routePolicy?.enableSsrf) {
+        const ssrfParamKeys = ['url', 'target', 'redirect', 'callback', 'dest', 'uri', 'webhook', 'endpoint'];
+        const candidateValues: string[] = [];
+        for (const k of ssrfParamKeys) {
+          const qVal = (req.query as Record<string, unknown>)?.[k];
+          if (typeof qVal === 'string') candidateValues.push(qVal);
+          const bVal = (req.body as Record<string, unknown>)?.[k];
+          if (typeof bVal === 'string') candidateValues.push(bVal);
+        }
+        for (const candidate of candidateValues) {
+          const trimmed = candidate.trim();
+          if (/^https?:\/\//i.test(trimmed) && !isSafeTarget(trimmed)) {
+            const eventId = uuidv4();
+            enqueueSecurityEvent({
+              id: eventId,
+              routeId,
+              type: 'SSRF_ATTEMPT',
+              severity: 'HIGH',
+              action: 'blocked',
+              sourceIp: req.ip || 'unknown'
+            });
+            broadcast(route.projectId, 'security:event', { id: eventId, routeId, type: 'SSRF_ATTEMPT', severity: 'HIGH' });
+            return res.status(403).json({ error: 'Forbidden: SSRF target blocked' });
+          }
+        }
+      }
+
+      // 4.5 Threat Detection (WAF enforced by default; monitor-only if route policy explicitly sets enableWaf=false)
+      const wafShouldBlock = routePolicy ? Boolean(routePolicy.enableWaf) : true;
       const threats = detectThreats(req);
       if (threats.length > 0) {
         for (const threat of threats) {
@@ -180,12 +211,14 @@ export function setupGateway(app: Express) {
             routeId,
             type: threat,
             severity: 'HIGH',
-            action: 'blocked',
+            action: wafShouldBlock ? 'blocked' : 'monitored',
             sourceIp: req.ip || 'unknown'
           });
           broadcast(route.projectId, 'security:event', { id: eventId, routeId, type: threat, severity: 'HIGH' });
         }
-        return res.status(403).json({ error: 'Forbidden: Suspicious activity detected' });
+        if (wafShouldBlock) {
+          return res.status(403).json({ error: 'Forbidden: Suspicious activity detected' });
+        }
       }
 
       // 5. Rate Limiting (Phase 4)
