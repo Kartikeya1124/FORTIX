@@ -6,6 +6,7 @@ import * as dotenv from 'dotenv';
 import { newDb } from 'pg-mem';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { normalizeDatabaseUrl, resolvePostgresSslOption, isLocalDatabaseHost } from './url.js';
 
 dotenv.config({ override: true });
@@ -25,7 +26,7 @@ function createMemDb() {
     s.registerFunction({
       name: 'uuid_generate_v4',
       returns: 'uuid' as any,
-      implementation: () => require('crypto').randomUUID()
+      implementation: () => crypto.randomUUID()
     });
   });
 
@@ -73,11 +74,11 @@ function createMemDb() {
 
   // STRICT SAFEGUARD: Only seed preview accounts in non-production environments
   if (!isProduction && process.env.SEED_PREVIEW_DATA !== 'false') {
-    (async () => {
+    setTimeout(async () => {
       try {
         const bcrypt = await import('bcryptjs');
-        const hash1 = await bcrypt.hash('AdminPassword123!', 10);
-        const hash2 = await bcrypt.hash('password123', 10);
+        const hash1 = await bcrypt.hash('AdminPassword123!', 8);
+        const hash2 = await bcrypt.hash('password123', 8);
 
         await memDb.insert(schema.users).values([
           {
@@ -141,7 +142,7 @@ function createMemDb() {
       } catch (e) {
         console.warn('[Database] Seed warning:', e);
       }
-    })();
+    }, isTest ? 0 : 50);
   }
 
   return memDb;

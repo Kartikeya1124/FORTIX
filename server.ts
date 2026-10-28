@@ -1,40 +1,17 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
-
-// Start internal background queue workers only if enabled (defaults to true for standalone/dev, false for multi-process worker setups)
-if (process.env.START_INTERNAL_WORKER !== 'false') {
-  import('./src/worker.js').catch(err => {
-    console.warn('[Worker] Internal worker startup warning:', err?.message || err);
-  });
-}
-
-// Start demo upstream API only if enabled (defaults to true for development)
-if (process.env.START_DEMO_API !== 'false') {
-  import('./demo-api.js').catch(err => {
-    console.warn('[DemoApi] Demo API startup warning:', err?.message || err);
-  });
-}
 import path from 'path';
 import cors from 'cors';
-import { createServer as createViteServer } from 'vite';
-import { setupApiRoutes } from './src/api/index.js';
-import { setupGateway } from './src/gateway/index.js';
-import { setupWebSockets } from './src/socket.js';
 import http from 'http';
-import { db } from './src/db/index.js';
-import { initDatabase } from './src/db/init.js';
-import { redisConnection } from './src/redis.js';
-import { sql } from 'drizzle-orm';
-import { getDependenciesHealth } from './src/api/system.js';
 
 // Handle uncaught exceptions and unhandled rejections gracefully
 process.on('uncaughtException', (err) => {
-  if (err.message && err.message.includes('ECONNREFUSED')) return;
+  if (err?.message && err.message.includes('ECONNREFUSED')) return;
   console.error('Uncaught Exception:', err);
 });
 
 process.on('unhandledRejection', (reason: any) => {
-  if (reason && reason.message && reason.message.includes('ECONNREFUSED')) return;
+  if (reason?.message && reason.message.includes('ECONNREFUSED')) return;
   console.error('Unhandled Rejection:', reason);
 });
 
@@ -68,6 +45,29 @@ export function validateProductionJwtSecret(secret?: string): { valid: boolean; 
   return { valid: true };
 }
 
+export function resolveServerPort(argv = process.argv, env = process.env): number {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--port' && argv[i + 1]) {
+      const parsed = parseInt(argv[i + 1], 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    if (arg.startsWith('--port=')) {
+      const parsed = parseInt(arg.slice('--port='.length), 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+  if (env.NODE_ENV === 'production' && env.PORT) {
+    const parsed = parseInt(env.PORT, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  if (env.PORT && env.PORT !== '8080') {
+    const parsed = parseInt(env.PORT, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 3000;
+}
+
 if (process.env.NODE_ENV === 'production') {
   const validation = validateProductionJwtSecret(process.env.JWT_SECRET);
   if (!validation.valid) {
@@ -79,34 +79,19 @@ if (process.env.NODE_ENV === 'production') {
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1);
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-  
-  // Health checks
-  app.get('/health/live', (req, res) => {
+  const PORT = resolveServerPort();
+
+  // Immediate liveness probe before heavy module/Vite initialization
+  app.get('/health/live', (_req, res) => {
     if (isShuttingDown) {
       return res.status(503).json({ status: 'shutting_down' });
     }
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
-  app.get('/health/ready', async (req, res) => {
-    if (isShuttingDown) {
-      return res.status(503).json({ status: 'shutting_down' });
-    }
-    const health = await getDependenciesHealth();
-    const statusCode = health.status === 'healthy' ? 200 : 503;
-    res.status(statusCode).json({ status: health.status, postgres: health.postgres, redis: health.redis });
-  });
-
-  app.get('/health/dependencies', async (req, res) => {
-    const health = await getDependenciesHealth();
-    res.status(200).json(health);
-  });
-
-  app.get('/health', async (req, res) => {
-    const health = await getDependenciesHealth();
-    res.status(200).json(health);
-  });
+  app.use(cors({ origin: true, credentials: true }));
+  app.use(express.json());
+  app.use(cookieParser());
 
   const server = http.createServer(app);
   server.on('error', (err: any) => {
@@ -122,50 +107,133 @@ async function startServer() {
     }
   });
 
-  setupWebSockets(server);
-
-  app.use(cors({ origin: true, credentials: true }));
-  app.use(express.json());
-  app.use(cookieParser());
-
-  setupApiRoutes(app);
-  setupGateway(app);
-
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false },
-      appType: 'spa',
+  // Bind TCP listener immediately so cold-boot readiness probes never time out
+  await new Promise<void>((resolve) => {
+    server.listen(PORT, '0.0.0.0', () => {
+      console.log(`FortiX Server listening on http://0.0.0.0:${PORT}`);
+      resolve();
     });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`FortiX Server running on http://0.0.0.0:${PORT}`);
   });
 
-  // Run migrations without blocking the initial TCP probe listener
-  initDatabase().then(async () => {
-    // Reconcile any abandoned workflow runs from prior process restarts/crashes
-    try {
-      const { reconcileAbandonedRuns } = await import('./src/autonomous/stateMachine.js');
-      const result = await reconcileAbandonedRuns();
-      if (result.reconciledCount > 0) {
-        console.log(`[Recovery] Reconciled ${result.reconciledCount} abandoned workflow run(s) into RECOVERY_REQUIRED:`, result.runIds);
+  // Dynamic router populated asynchronously; in-flight requests await bootstrapPromise seamlessly
+  const runtimeRouter = express.Router();
+  let redisQuit: (() => Promise<unknown>) | null = null;
+
+  const bootstrapPromise = (async () => {
+    const [
+      { setupWebSockets },
+      { getDependenciesHealth },
+      { setupApiRoutes },
+      { setupGateway },
+      { initDatabase },
+      { redisConnection }
+    ] = await Promise.all([
+      import('./src/socket.js'),
+      import('./src/api/system.js'),
+      import('./src/api/index.js'),
+      import('./src/gateway/index.js'),
+      import('./src/db/init.js'),
+      import('./src/redis.js')
+    ]);
+
+    redisQuit = () => redisConnection.quit();
+
+    setupWebSockets(server);
+
+    runtimeRouter.get('/health/ready', async (_req, res) => {
+      if (isShuttingDown) {
+        return res.status(503).json({ status: 'shutting_down' });
       }
-    } catch (recErr: any) {
-      console.warn('[Recovery] Warning during startup run reconciliation:', recErr?.message || recErr);
+      const health = await getDependenciesHealth();
+      const statusCode = health.status === 'healthy' ? 200 : 503;
+      res.status(statusCode).json({
+        status: health.status,
+        postgres: health.postgres,
+        redis: health.redis
+      });
+    });
+
+    runtimeRouter.get('/health/dependencies', async (_req, res) => {
+      const health = await getDependenciesHealth();
+      res.status(200).json(health);
+    });
+
+    runtimeRouter.get('/health', async (_req, res) => {
+      const health = await getDependenciesHealth();
+      res.status(200).json(health);
+    });
+
+    setupApiRoutes(runtimeRouter as any);
+    setupGateway(runtimeRouter as any);
+
+    if (process.env.NODE_ENV !== 'production') {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: false,
+          watch: null
+        },
+        appType: 'spa'
+      });
+      runtimeRouter.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), 'dist');
+      runtimeRouter.use(express.static(distPath));
+      runtimeRouter.get('*', (_req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
     }
-  }).catch((err) => {
-    console.error('[Database] Fatal startup migration error:', err?.message || err);
-    if (process.env.NODE_ENV === 'production' || process.env.STRICT_PERSISTENT_DB === 'true') {
-      console.error('[Database] STRICT_PERSISTENT_DB or production mode is active. Process exiting due to unapplied migrations.');
-      process.exit(1);
+
+    // Run migrations and abandoned-workflow reconciliation asynchronously
+    initDatabase()
+      .then(async () => {
+        try {
+          const { reconcileAbandonedRuns } = await import('./src/autonomous/stateMachine.js');
+          const result = await reconcileAbandonedRuns();
+          if (result.reconciledCount > 0) {
+            console.log(
+              `[Recovery] Reconciled ${result.reconciledCount} abandoned workflow run(s) into RECOVERY_REQUIRED:`,
+              result.runIds
+            );
+          }
+        } catch (recErr: any) {
+          console.warn('[Recovery] Warning during startup run reconciliation:', recErr?.message || recErr);
+        }
+      })
+      .catch((err) => {
+        console.error('[Database] Fatal startup migration error:', err?.message || err);
+        if (process.env.NODE_ENV === 'production' || process.env.STRICT_PERSISTENT_DB === 'true') {
+          console.error('[Database] STRICT_PERSISTENT_DB or production mode is active. Process exiting due to unapplied migrations.');
+          process.exit(1);
+        }
+      });
+
+    // Defer internal demo API and background worker until HTTP & Vite routes are ready
+    setTimeout(() => {
+      if (process.env.START_DEMO_API !== 'false') {
+        import('./demo-api.js').catch((err) => {
+          console.warn('[DemoApi] Demo API startup warning:', err?.message || err);
+        });
+      }
+      if (process.env.START_INTERNAL_WORKER !== 'false') {
+        import('./src/worker.js').catch((err) => {
+          console.warn('[Worker] Internal worker startup warning:', err?.message || err);
+        });
+      }
+    }, 150);
+  })();
+
+  bootstrapPromise.catch((err) => {
+    console.error('[Server] Bootstrap initialization error:', err);
+  });
+
+  app.use(async (req, res, next) => {
+    try {
+      await bootstrapPromise;
+      runtimeRouter(req, res, next);
+    } catch (err) {
+      next(err);
     }
   });
 
@@ -178,15 +246,16 @@ async function startServer() {
     server.close(async () => {
       console.log('HTTP server closed.');
       try {
-        await redisConnection.quit();
-        console.log('Redis connection closed.');
+        if (redisQuit) {
+          await redisQuit();
+          console.log('Redis connection closed.');
+        }
       } catch (e) {
         console.error('Error closing Redis connection:', e);
       }
       process.exit(0);
     });
 
-    // Force shutdown after 10 seconds
     setTimeout(() => {
       console.error('Could not close connections in time, forcefully shutting down');
       process.exit(1);
@@ -197,4 +266,9 @@ async function startServer() {
   process.on('SIGINT', shutdown);
 }
 
-startServer().catch(console.error);
+if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+  startServer().catch((err) => {
+    console.error('[Server] Fatal startup error:', err);
+    process.exit(1);
+  });
+}

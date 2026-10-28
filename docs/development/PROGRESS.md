@@ -1,7 +1,7 @@
 # FortiX Engineering Progress Record & Checkpoint Log
 
 - **Baseline Remote Commit**: `8a761180f4ae2f42c2e249dce42ba22178cfa80b`
-- **Previous Pushed Checkpoint (`origin/main`)**: `2f9769e5af25d946a44f9d4fd0718a3964be94d4` (`mr-vdnt/FortiX`)
+- **Previous Pushed Checkpoint (`origin/main`)**: `d47e8d88ccb0701466d94d6099c4cdebbdeadb1e` (`mr-vdnt/FortiX`)
 
 ---
 
@@ -40,7 +40,7 @@
 
 ---
 
-## Checkpoint: Default Night Mode, Full-Screen Blurred Project Switcher Overlay, Login Overhaul & End-to-End Security Policies
+## Checkpoint (`d47e8d8`): Default Night Mode, Full-Screen Blurred Project Switcher Overlay, Login Overhaul & End-to-End Security Policies
 - **Objective**:
   1. Convert the application default theme to Night Mode (`dark`) before first paint (`index.html`, `src/index.css` `@custom-variant dark`, `src/App.tsx`) and ensure high-contrast legibility on all `<input>`, `<select>`, `<textarea>`, and `<option>` elements.
   2. Fix `ProjectSwitcher` (`src/components/ProjectSwitcher.tsx`) so clicking the header project switcher button or creating a project renders via React Portal (`document.body`) over a full-screen blurred backdrop (`backdrop-blur-md`) with solid, opaque Night Mode dialog surfaces that never merge with the underlying screen.
@@ -56,5 +56,18 @@
   - Live runtime smoke check (`GET /api/health/ready`, `POST /api/auth/login`, `POST /api/control/policies`, `GET /api/control/policies`, `DELETE /api/control/policies/:id`): **All 200/201 OK**.
   - `npm run lint` (`tsc --noEmit`) & `npm run build`: **Clean pass** (0 errors).
   - Secret scan & `git diff --check`: **0 leaked credentials/tokens, 0 whitespace errors**.
-- **Next Action**:
-  - Revoke any Personal Access Token or cloud credential previously pasted in chat, then proceed to Phase 1 (Multi-process Docker staging verification & API-key distributed revocation SLA verification).
+
+---
+
+## Checkpoint: Cold-Boot Dev Server Startup Readiness & Port Resolution Fix
+- **Objective**:
+  1. Ensure `server.ts` binds port `3000` (`0.0.0.0:3000`) and serves `/health/live` immediately (`< 500ms`) on cold container startup while awaiting route/Vite initialization gracefully for in-flight requests.
+  2. Parse CLI `--port` flags explicitly and avoid colliding with container proxy `PORT=8080` in non-production environments.
+  3. Skip BullMQ TCP retry workers when Redis is running in local in-memory fallback mode (`isRealRedisActive === false`), replace CJS `require('crypto')` inside `pg-mem` UUID registration with ESM `crypto.randomUUID()`, and defer background worker/demo-API/preview-seed startup until after HTTP readiness.
+- **Files Modified**:
+  - `server.ts`, `src/worker.ts`, `src/db/index.ts`, `docs/development/PROGRESS.md`
+- **Verification**:
+  - `npx vitest run tests/unit/production-hardening.test.ts tests/unit/security-policies.test.ts`: **2 passed (2/2 suites), 15 passed (15/15 tests)**, 0 failed.
+  - `npm run lint` (`tsc --noEmit`) & `npm run build`: **Clean pass** (0 errors).
+  - Live HTTP probes (`GET /health/live`, `GET /health/ready`, `GET /`, `POST /api/auth/login`): **All 200 OK**.
+  - Secret scan & `git diff --check`: **0 leaked credentials/tokens, 0 whitespace errors**.
