@@ -1,6 +1,6 @@
 import express from 'express';
 import { db, getStorageMode } from '../db/index.js';
-import { redisConnection } from '../redis.js';
+import { redisConnection, getRedisStorageMode } from '../redis.js';
 import { sql } from 'drizzle-orm';
 import { getSocketStats } from '../socket.js';
 import { systemHealthGauge, register } from '../lib/metrics.js';
@@ -11,7 +11,7 @@ const router = express.Router();
 
 let cachedHealth: any = null;
 let lastHealthCheckTime = 0;
-const HEALTH_CACHE_TTL_MS = 3000;
+const HEALTH_CACHE_TTL_MS = 5000;
 
 export async function getDependenciesHealth() {
   const now = Date.now();
@@ -29,7 +29,7 @@ export async function getDependenciesHealth() {
   try {
     let timeoutId: any;
     const timeoutPromise = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error('PostgreSQL check timed out (1000ms bounded threshold)')), 1000);
+      timeoutId = setTimeout(() => reject(new Error('PostgreSQL check timed out (4000ms bounded threshold)')), 4000);
     });
 
     await Promise.race([
@@ -47,12 +47,12 @@ export async function getDependenciesHealth() {
 
   const redisStart = Date.now();
   try {
-    if (redisConnection.status && redisConnection.status !== 'ready' && redisConnection.status !== 'connecting') {
+    if (redisConnection.status && !['ready', 'connecting', 'connect', 'reconnecting'].includes(redisConnection.status)) {
       redisStatus = 'error';
     } else {
       let timeoutId: any;
       const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('Redis Ping Timeout')), 1000);
+        timeoutId = setTimeout(() => reject(new Error('Redis Ping Timeout')), 4000);
       });
       await Promise.race([
         redisConnection.ping(),
@@ -82,7 +82,8 @@ export async function getDependenciesHealth() {
     },
     redis: {
       status: redisStatus,
-      latencyMs: redisLatencyMs
+      latencyMs: redisLatencyMs,
+      storageMode: getRedisStorageMode()
     },
     telemetry: {
       status: socketStats.connectedSockets >= 0 ? 'healthy' : 'degraded',

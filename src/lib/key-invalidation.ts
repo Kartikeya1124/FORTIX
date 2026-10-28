@@ -3,19 +3,11 @@ import { z } from 'zod';
 import { exec, execSync } from 'child_process';
 import { logger } from './logger.js';
 import { invalidateApiKeyCache } from '../gateway/index.js';
-import { sharedRedisMock } from '../redis.js';
+import { sharedRedisMock, resolvedRedisUrl, isRealRedisActive } from '../redis.js';
 
 import { apiKeyCacheInvalidationsTotal } from './metrics.js';
 
 export const REDIS_KEY_REVOCATION_CHANNEL = 'fortix:api-key:revoked:v1';
-
-let isRedisDaemonRunning = false;
-try {
-  execSync('redis-cli ping >/dev/null 2>&1 || (which redis-server >/dev/null 2>&1 && redis-server --daemonize yes)', { timeout: 2000 });
-  isRedisDaemonRunning = true;
-} catch (e) {
-  isRedisDaemonRunning = false;
-}
 
 export const keyRevocationEventSchema = z.discriminatedUnion('event', [
   z.object({
@@ -34,7 +26,8 @@ export const keyRevocationEventSchema = z.discriminatedUnion('event', [
 
 export type KeyRevocationEvent = z.infer<typeof keyRevocationEventSchema>;
 
-const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+const redisUrl = resolvedRedisUrl;
+const isTls = redisUrl.startsWith('rediss://');
 
 // Dedicated publisher and subscriber clients
 let publisherClient: Redis | null = null;
@@ -43,7 +36,7 @@ let isSubscriberInitialized = false;
 
 export function getPublisher(): Redis {
   if (!publisherClient) {
-    if (!isRedisDaemonRunning && process.env.USE_REAL_REDIS !== 'true') {
+    if (!isRealRedisActive && process.env.USE_REAL_REDIS !== 'true') {
       publisherClient = (sharedRedisMock as any).createConnectedClient 
         ? (sharedRedisMock as any).createConnectedClient() 
         : new (sharedRedisMock.constructor as any)();
@@ -53,23 +46,16 @@ export function getPublisher(): Redis {
 
     publisherClient = new Redis(redisUrl, {
       maxRetriesPerRequest: 3,
+      enableReadyCheck: false,
       enableOfflineQueue: true,
       lazyConnect: false,
-      connectTimeout: 3000,
-      retryStrategy: (times) => {
-        if (times % 5 === 0) {
-          try {
-            exec('which redis-server >/dev/null 2>&1 && redis-server --daemonize yes', () => {});
-          } catch {}
-        }
-        return Math.min(times * 100, 2000);
-      }
+      connectTimeout: 10000,
+      tls: isTls ? { rejectUnauthorized: false } : undefined,
+      retryStrategy: (times) => Math.min(times * 250, 5000),
     });
     publisherClient.on('error', (err: any) => {
-      if (err?.message && err.message.includes('ECONNREFUSED')) {
-        try {
-          exec('which redis-server >/dev/null 2>&1 && redis-server --daemonize yes', () => {});
-        } catch {}
+      const msg = String(err?.message || '');
+      if (msg.includes('ECONNREFUSED') || msg.includes('EAI_AGAIN') || msg.includes('ENOTFOUND')) {
         return;
       }
       logger.warn({ msg: '[KeyRevocation Publisher] Redis error', err: err.message });
@@ -98,7 +84,7 @@ export function setupKeyRevocationSubscriber(customInvalidate?: (keyId?: string,
 
   const invalidate = customInvalidate || invalidateApiKeyCache;
 
-  if (!isRedisDaemonRunning && process.env.USE_REAL_REDIS !== 'true') {
+  if (!isRealRedisActive && process.env.USE_REAL_REDIS !== 'true') {
     const sub = (sharedRedisMock as any).createConnectedClient 
       ? (sharedRedisMock as any).createConnectedClient() 
       : sharedRedisMock;
@@ -130,24 +116,17 @@ export function setupKeyRevocationSubscriber(customInvalidate?: (keyId?: string,
 
   subscriberClient = new Redis(redisUrl, {
     maxRetriesPerRequest: null,
+    enableReadyCheck: false,
     enableOfflineQueue: true,
     lazyConnect: false,
-    connectTimeout: 3000,
-    retryStrategy: (times) => {
-      if (times % 5 === 0) {
-        try {
-          exec('which redis-server >/dev/null 2>&1 && redis-server --daemonize yes', () => {});
-        } catch {}
-      }
-      return Math.min(times * 100, 2000);
-    }
+    connectTimeout: 10000,
+    tls: isTls ? { rejectUnauthorized: false } : undefined,
+    retryStrategy: (times) => Math.min(times * 250, 5000),
   });
 
   subscriberClient.on('error', (err: any) => {
-    if (err?.message && err.message.includes('ECONNREFUSED')) {
-      try {
-        exec('which redis-server >/dev/null 2>&1 && redis-server --daemonize yes', () => {});
-      } catch {}
+    const msg = String(err?.message || '');
+    if (msg.includes('ECONNREFUSED') || msg.includes('EAI_AGAIN') || msg.includes('ENOTFOUND')) {
       return;
     }
     logger.warn({ msg: '[KeyRevocation Subscriber] Redis error', err: err.message });

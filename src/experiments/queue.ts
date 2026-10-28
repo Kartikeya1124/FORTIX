@@ -1,15 +1,18 @@
 import { Queue } from 'bullmq';
-import { redisConnection } from '../redis.js';
+import { redisConnection, isRealRedisActive, getBullMqConnectionOptions } from '../redis.js';
 import { runExperimentLogic } from './worker.js';
 import { registerQueue, recordDlqFailure } from '../lib/dlq.js';
 import { v4 as uuidv4 } from 'uuid';
 
-export const experimentQueue = new Queue('experiments', { connection: redisConnection as any });
+export const experimentQueue = new Queue('experiments', {
+  connection: (isRealRedisActive ? getBullMqConnectionOptions() : redisConnection) as any,
+});
 
 registerQueue('experiments', experimentQueue);
 
 experimentQueue.on('error', (err: any) => {
-  if (err?.message?.includes('ECONNREFUSED')) return;
+  const msg = String(err?.message || '');
+  if (msg.includes('ECONNREFUSED') || msg.includes('EAI_AGAIN') || msg.includes('ENOTFOUND')) return;
   console.error('[BullMQ experiments queue] Error:', err);
 });
 

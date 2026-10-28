@@ -1,4 +1,4 @@
-import { redisConnection } from './redis.js';
+import { redisConnection, isManagedServerlessRedis } from './redis.js';
 import { db } from './db/index.js';
 import { metricLogs, securityEvents } from './db/schema.js';
 import { logger } from './lib/logger.js';
@@ -7,7 +7,8 @@ import { METRICS_STREAM_KEY, SECURITY_EVENTS_STREAM_KEY } from './lib/telemetry.
 const CONSUMER_GROUP = 'fortix:telemetry_group';
 const CONSUMER_NAME = process.env.HOSTNAME || 'worker-' + process.pid;
 const BATCH_SIZE = 100;
-const BLOCK_TIMEOUT_MS = 2000;
+const BLOCK_TIMEOUT_MS = isManagedServerlessRedis ? 5000 : 2000;
+const IDLE_SLEEP_MS = isManagedServerlessRedis ? 20000 : 1000;
 
 let isRunning = true;
 
@@ -148,8 +149,8 @@ export async function processTelemetryBatch() {
       }
 
       if (!hadEntries && isRunning) {
-        // Yield/sleep when no items to prevent tight loop on in-memory mock or empty streams
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Yield/sleep when no items to prevent tight loop or exhausting serverless Redis command quotas
+        await new Promise(resolve => setTimeout(resolve, IDLE_SLEEP_MS));
       }
     } catch (err: any) {
       const errMsg = err?.message || '';

@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db/index.js';
 import { webhooks, webhookDeliveries } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
-import { redisConnection } from '../redis.js';
+import { redisConnection, isRealRedisActive, getBullMqConnectionOptions } from '../redis.js';
 import { registerQueue, recordDlqFailure } from './dlq.js';
 import { logger } from './logger.js';
 import { securityGuard } from '../services/SecurityGuard.js';
@@ -57,13 +57,14 @@ export const DEFAULT_WEBHOOK_JOB_OPTIONS = {
 
 // Initialize BullMQ webhook queue
 export const webhookQueue = new Queue('fortix-webhooks', {
-  connection: redisConnection as any,
+  connection: (isRealRedisActive ? getBullMqConnectionOptions() : redisConnection) as any,
 });
 
 registerQueue('fortix-webhooks', webhookQueue);
 
 webhookQueue.on('error', (err: any) => {
-  if (err?.message?.includes('ECONNREFUSED')) return;
+  const msg = String(err?.message || '');
+  if (msg.includes('ECONNREFUSED') || msg.includes('EAI_AGAIN') || msg.includes('ENOTFOUND')) return;
   logger.error({ err }, '[BullMQ fortix-webhooks queue] Error');
 });
 

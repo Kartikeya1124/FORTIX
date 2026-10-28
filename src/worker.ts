@@ -8,41 +8,7 @@ import { registerQueue, recordDlqFailure } from './lib/dlq.js';
 import { logger } from './lib/logger.js';
 import { processTelemetryBatch } from './telemetry-worker.js';
 import { executeWebhookDelivery } from './lib/webhooks.js';
-
-function getRedisConnectionConfig() {
-  const rawUrl = process.env.REDIS_URL || '';
-  // Filter out unresolvable private cloud internal hostnames (e.g. Render internal 'red-...') outside their VPC
-  const isRenderInternal = rawUrl.includes('red-') && !rawUrl.includes('.render.com');
-
-  if (rawUrl && !isRenderInternal) {
-    try {
-      const url = new URL(rawUrl);
-      return {
-        host: url.hostname || '127.0.0.1',
-        port: parseInt(url.port || '6379', 10),
-        password: url.password || undefined,
-        username: url.username || undefined,
-        db: url.pathname && url.pathname.length > 1 ? parseInt(url.pathname.replace('/', ''), 10) : 0,
-        maxRetriesPerRequest: null,
-        enableOfflineQueue: false,
-        retryStrategy(times: number) {
-          return Math.min(times * 1000, 15000);
-        }
-      };
-    } catch {
-      // fallback to host/port
-    }
-  }
-  return {
-    host: process.env.REDIS_HOST || '127.0.0.1',
-    port: parseInt(process.env.REDIS_PORT || '6379', 10),
-    maxRetriesPerRequest: null,
-    enableOfflineQueue: false,
-    retryStrategy(times: number) {
-      return Math.min(times * 1000, 15000);
-    }
-  };
-}
+import { getBullMqConnectionOptions, isManagedServerlessRedis } from './redis.js';
 
 export function isBenignConnectionError(err: any): boolean {
   if (!err) return false;
@@ -54,6 +20,7 @@ export function isBenignConnectionError(err: any): boolean {
     code === 'ENOTFOUND' ||
     code === 'ETIMEDOUT' ||
     code === 'EHOSTUNREACH' ||
+    code === 'ECONNRESET' ||
     msg.includes('ECONNREFUSED') ||
     msg.includes('EAI_AGAIN') ||
     msg.includes('getaddrinfo') ||
@@ -62,7 +29,10 @@ export function isBenignConnectionError(err: any): boolean {
   );
 }
 
-const redisConnection = getRedisConnectionConfig();
+const redisConnection = getBullMqConnectionOptions();
+const workerOptions = isManagedServerlessRedis
+  ? { connection: redisConnection as any, drainDelay: 30, stalledInterval: 120000 }
+  : { connection: redisConnection as any };
 
 const cleanupQueue = new Queue('cleanup', { connection: redisConnection as any });
 registerQueue('cleanup', cleanupQueue);
@@ -76,7 +46,7 @@ const experimentWorker = new Worker('experiments', async job => {
   if (job.name === 'run-experiment') {
     await runExperimentLogic(job.data.experimentId);
   }
-}, { connection: redisConnection as any });
+}, workerOptions);
 
 experimentWorker.on('error', (err: any) => {
   if (isBenignConnectionError(err)) return;
@@ -116,7 +86,7 @@ const webhookWorker = new Worker('fortix-webhooks', async job => {
     const attempt = (job.attemptsMade || 0) + 1;
     await executeWebhookDelivery(job.data, attempt);
   }
-}, { connection: redisConnection as any });
+}, workerOptions);
 
 webhookWorker.on('error', (err: any) => {
   if (isBenignConnectionError(err)) return;
@@ -150,9 +120,9 @@ webhookWorker.on('failed', async (job, err) => {
   }
 });
 
-// Schedule the cleanup job to run every hour
-cleanupQueue.add('reaper', {}, { repeat: { pattern: '*/5 * * * *' } } as any);
-cleanupQueue.add('telemetry-ttl', {}, { repeat: { pattern: '0 * * * *' } } as any);
+// Schedule the cleanup job to run periodically
+cleanupQueue.add('reaper', {}, { repeat: { pattern: '*/5 * * * *' } } as any).catch(() => {});
+cleanupQueue.add('telemetry-ttl', {}, { repeat: { pattern: '0 * * * *' } } as any).catch(() => {});
 
 const cleanupWorker = new Worker('cleanup', async job => {
   if (job.name === 'telemetry-ttl') {
@@ -168,7 +138,7 @@ const cleanupWorker = new Worker('cleanup', async job => {
       .where(and(eq(experiments.status, 'RUNNING'), lt(experiments.startedAt, fiveMinsAgo)));
     logger.info('Reaped orphaned experiments');
   }
-}, { connection: redisConnection as any });
+}, workerOptions);
 
 cleanupWorker.on('error', (err: any) => {
   if (isBenignConnectionError(err)) return;

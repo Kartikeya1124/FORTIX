@@ -4,6 +4,8 @@ import request from 'supertest';
 import http from 'http';
 import { setupGateway } from '../../src/gateway/index.js';
 import { db, getStorageMode, isPersistentStorage } from '../../src/db/index.js';
+import { normalizeDatabaseUrl, resolvePostgresSslOption } from '../../src/db/url.js';
+import { normalizeRedisUrl } from '../../src/redis.js';
 import { apiRoutes, apiKeys, users, organizations, projects } from '../../src/db/schema.js';
 import { validateProductionJwtSecret } from '../../server.js';
 import { getEffectiveRedisFailurePolicy, parseAndValidateRedisFailurePolicy } from '../../src/rate-limit/redis.js';
@@ -50,6 +52,17 @@ describe('Phase 2 — Production Hardening & Gateway Correctness', () => {
       expect(
         validateProductionDbConfig('production', false, 'postgres://fortix:secret@prod-db.cloud.internal:5432/fortix_prod')
       ).toBe(true);
+    });
+
+    it('normalizes quoted cloud PostgreSQL/Redis URLs and encodes @ in passwords', () => {
+      const rawPg = '"postgresql://postgres.ref:my@pass@word@aws-0-region.pooler.supabase.com:5432/postgres"';
+      const normalizedPg = normalizeDatabaseUrl(rawPg);
+      expect(normalizedPg).toBe('postgresql://postgres.ref:my%40pass%40word@aws-0-region.pooler.supabase.com:5432/postgres');
+      expect(resolvePostgresSslOption(normalizedPg)).toEqual({ rejectUnauthorized: false });
+      expect(resolvePostgresSslOption('postgres://fortix:pw@127.0.0.1:5432/fortix_db')).toBe(false);
+
+      const rawRedis = '"rediss://default:token123@example.upstash.io:6379"';
+      expect(normalizeRedisUrl(rawRedis)).toBe('rediss://default:token123@example.upstash.io:6379');
     });
   });
 

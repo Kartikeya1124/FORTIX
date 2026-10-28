@@ -22,6 +22,13 @@
       "when": 1790900000000,
       "tag": "0002_webhook_deliveries",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791500000000,
+      "tag": "0003_workflow_runs",
+      "breakpoints": true
     }
   ]
 }

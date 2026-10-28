@@ -40,3 +40,6 @@ dist-ssr
 # Redis database dump
 dump.rdb
 *.rdb
+
+# Ephemeral chat attachments
+public/assets/aistudio/

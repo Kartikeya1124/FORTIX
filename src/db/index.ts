@@ -6,11 +6,15 @@ import * as dotenv from 'dotenv';
 import { newDb } from 'pg-mem';
 import fs from 'fs';
 import path from 'path';
+import { normalizeDatabaseUrl, resolvePostgresSslOption, isLocalDatabaseHost } from './url.js';
 
 dotenv.config({ override: true });
 
-const isProduction = process.env.NODE_ENV === 'production';
-const strictPersistentDb = process.env.STRICT_PERSISTENT_DB === 'true';
+const isTest =
+  (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) &&
+  process.env.TEST_AGAINST_PERSISTENT !== 'true';
+const isProduction = !isTest && process.env.NODE_ENV === 'production';
+const strictPersistentDb = !isTest && process.env.STRICT_PERSISTENT_DB === 'true';
 
 let storageMode: 'persistent' | 'in-memory' = 'in-memory';
 
@@ -90,25 +94,48 @@ function createMemDb() {
           }
         ]).onConflictDoNothing();
 
-        await memDb.insert(schema.organizations).values({
-          id: '00000000-0000-0000-0000-000000000001',
-          name: 'Default Org',
-          ownerId: '00000000-0000-0000-0000-000000000001'
-        }).onConflictDoNothing();
+        await memDb.insert(schema.organizations).values([
+          {
+            id: '00000000-0000-0000-0000-000000000001',
+            name: 'Default Org',
+            ownerId: '00000000-0000-0000-0000-000000000001'
+          },
+          {
+            id: '00000000-0000-0000-0000-000000000002',
+            name: 'Default Org',
+            ownerId: '00000000-0000-0000-0000-000000000002'
+          }
+        ]).onConflictDoNothing();
 
-        await memDb.insert(schema.projects).values({
-          id: '00000000-0000-0000-0000-000000000001',
-          orgId: '00000000-0000-0000-0000-000000000001',
-          name: 'Production Gateway',
-          environment: 'production'
-        }).onConflictDoNothing();
+        await memDb.insert(schema.projects).values([
+          {
+            id: '00000000-0000-0000-0000-000000000001',
+            orgId: '00000000-0000-0000-0000-000000000001',
+            name: 'Production Gateway',
+            environment: 'production'
+          },
+          {
+            id: '00000000-0000-0000-0000-000000000002',
+            orgId: '00000000-0000-0000-0000-000000000002',
+            name: 'Production Gateway',
+            environment: 'production'
+          }
+        ]).onConflictDoNothing();
 
-        await memDb.insert(schema.apiRoutes).values({
-          id: '00000000-0000-0000-0000-000000000001',
-          projectId: '00000000-0000-0000-0000-000000000001',
-          pathPattern: '/api/v1/data',
-          targetUrl: 'http://localhost:3001/api/v1/data'
-        }).onConflictDoNothing();
+        await memDb.insert(schema.apiRoutes).values([
+          {
+            id: '00000000-0000-0000-0000-000000000001',
+            projectId: '00000000-0000-0000-0000-000000000001',
+            pathPattern: '/api/v1/data',
+            targetUrl: 'http://fortix-demo-api:3001/api/v1/data'
+          },
+          {
+            id: '00000000-0000-0000-0000-000000000002',
+            projectId: '00000000-0000-0000-0000-000000000002',
+            pathPattern: '/api/v1/data',
+            targetUrl: 'http://fortix-demo-api:3001/api/v1/data'
+          }
+        ]).onConflictDoNothing();
 
         console.log('[Database] Preview database seeded with developer accounts (non-production only).');
       } catch (e) {
@@ -121,11 +148,17 @@ function createMemDb() {
 }
 
 function initializeDatabase() {
-  const connectionString = process.env.DATABASE_URL;
+  const rawConnectionString = process.env.DATABASE_URL;
+  const connectionString = normalizeDatabaseUrl(rawConnectionString);
 
   // Enforcement: Production or strict persistent mode MUST have a real persistent PostgreSQL database
   if (isProduction || strictPersistentDb) {
-    if (!connectionString || connectionString.includes('memory') || connectionString.trim() === '') {
+    if (
+      !connectionString ||
+      connectionString.includes('memory') ||
+      connectionString.includes('your_strong_database_password_here') ||
+      connectionString.trim() === ''
+    ) {
       throw new Error(
         '[FATAL SECURITY SAFEGUARD] Production startup rejected: Persistent PostgreSQL database (DATABASE_URL) is required in production (STRICT_PERSISTENT_DB or NODE_ENV=production). In-memory fallback (pg-mem) is strictly prohibited in production.'
       );
@@ -135,10 +168,11 @@ function initializeDatabase() {
       console.log('[Database] Connecting to persistent PostgreSQL database in production/strict mode...');
       const client = postgres(connectionString, {
         prepare: false,
-        ssl: connectionString.includes('sslmode=disable') ? false : 'require',
-        connect_timeout: 10,
+        ssl: resolvePostgresSslOption(connectionString) as any,
+        connect_timeout: 15,
         idle_timeout: 20,
-        max_lifetime: 60 * 30
+        max_lifetime: 60 * 30,
+        max: 10,
       });
       storageMode = 'persistent';
       return drizzlePgJs(client, { schema });
@@ -147,20 +181,33 @@ function initializeDatabase() {
     }
   }
 
-  // Non-production environment: Attempt persistent DB only if not running offline test suite and not forced to memory
-  const isTest = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
-  if (!isTest && connectionString && !connectionString.includes('memory') && !connectionString.includes('render.com') && process.env.FORCE_IN_MEMORY !== 'true') {
+  const isPlaceholder = connectionString.includes('your_strong_database_password_here');
+  const isRemoteOrExplicitLocal =
+    !isLocalDatabaseHost(connectionString) || process.env.USE_LOCAL_POSTGRES === 'true';
+
+  if (
+    !isTest &&
+    connectionString &&
+    !isPlaceholder &&
+    !connectionString.includes('memory') &&
+    !connectionString.includes('render.com') &&
+    isRemoteOrExplicitLocal &&
+    process.env.FORCE_IN_MEMORY !== 'true'
+  ) {
     try {
+      console.log('[Database] Connecting to configured persistent PostgreSQL database...');
       const client = postgres(connectionString, {
         prepare: false,
-        ssl: connectionString.includes('sslmode=disable') ? false : 'require',
-        connect_timeout: 3,
-        idle_timeout: 10,
+        ssl: resolvePostgresSslOption(connectionString) as any,
+        connect_timeout: 15,
+        idle_timeout: 20,
+        max_lifetime: 60 * 30,
+        max: 10,
       });
       storageMode = 'persistent';
       return drizzlePgJs(client, { schema });
     } catch {
-      console.warn('[Database] Could not connect to configured DATABASE_URL in non-production mode. Falling back to pg-mem.');
+      console.warn('[Database] Could not initialize configured DATABASE_URL in non-production mode. Falling back to pg-mem.');
     }
   }
 

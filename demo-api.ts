@@ -7,6 +7,15 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'fortix-demo-api' });
 });
 
+app.all('/api/v1/data', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'fortix-demo-api',
+    endpoint: '/api/v1/data',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.get('/api/payment', (req, res) => {
   res.json({ status: 'ok', message: 'Payment processed successfully' });
 });

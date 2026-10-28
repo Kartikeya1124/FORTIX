@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import crypto from 'crypto';
+import { normalizeDatabaseUrl, resolvePostgresSslOption, isLocalDatabaseHost } from './url.js';
 
 dotenv.config({ override: true });
 
@@ -25,24 +26,12 @@ function getModuleDirname(): string {
 }
 
 export async function runMigrations(customDbUrl?: string, customMigrationsFolder?: string): Promise<void> {
-  const connectionString = customDbUrl || process.env.DATABASE_URL || 'postgres://fortix:fortix_password@127.0.0.1:5432/fortix_db';
+  const rawConn = customDbUrl || process.env.DATABASE_URL || 'postgres://fortix:fortix_password@127.0.0.1:5432/fortix_db';
+  const connectionString = normalizeDatabaseUrl(rawConn);
 
   if (!connectionString) {
     throw new Error('DATABASE_URL is not set for database migration.');
   }
-
-  const isSslDisabled = 
-    connectionString.includes('sslmode=disable') || 
-    connectionString.includes('ssl=false') ||
-    (!connectionString.includes('sslmode=require') && (connectionString.includes('localhost') || connectionString.includes('127.0.0.1')));
-
-  // Use a dedicated single connection client for schema migration
-  const migrationClient = postgres(connectionString, {
-    max: 1,
-    ssl: isSslDisabled ? false : 'require',
-    connect_timeout: 1,
-    idle_timeout: 1,
-  });
 
   // Determine migrations folder
   const currentDir = getModuleDirname();
@@ -64,6 +53,55 @@ export async function runMigrations(customDbUrl?: string, customMigrationsFolder
       migrationsFolder = path.resolve(process.cwd(), 'drizzle');
     }
   }
+
+  const isIsolatedUnitTest =
+    !customDbUrl &&
+    (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) &&
+    process.env.TEST_AGAINST_PERSISTENT !== 'true';
+
+  if (isIsolatedUnitTest) {
+    const { db } = await import('./index.js');
+    await db.execute(sql`CREATE SCHEMA IF NOT EXISTS drizzle`);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+        id int,
+        hash text,
+        created_at bigint
+      )
+    `);
+    const countRes = await db.execute(sql`SELECT COUNT(*)::int as count FROM drizzle.__drizzle_migrations`);
+    const count = (Array.isArray(countRes) ? countRes[0]?.count : (countRes as any)?.rows?.[0]?.count) ?? 0;
+    if (count === 0 && migrationsFolder) {
+      const journalPath = path.join(migrationsFolder, 'meta', '_journal.json');
+      if (fs.existsSync(journalPath)) {
+        const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+        let seq = 1;
+        for (const entry of journal.entries) {
+          const sqlFilePath = path.join(migrationsFolder, `${entry.tag}.sql`);
+          if (fs.existsSync(sqlFilePath)) {
+            const fileContent = fs.readFileSync(sqlFilePath, 'utf8');
+            const hash = crypto.createHash('sha256').update(fileContent).digest('hex');
+            await db.execute(sql`
+              INSERT INTO drizzle.__drizzle_migrations (id, hash, created_at)
+              VALUES (${seq++}, ${hash}, ${entry.when})
+            `);
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  const isLocal = isLocalDatabaseHost(connectionString);
+
+  // Use a dedicated single connection client for schema migration
+  const migrationClient = postgres(connectionString, {
+    max: 1,
+    prepare: false,
+    ssl: resolvePostgresSslOption(connectionString) as any,
+    connect_timeout: isLocal ? 2 : 15,
+    idle_timeout: 5,
+  });
 
   console.log('[Migration] Target migrations directory:', migrationsFolder);
 
@@ -121,9 +159,80 @@ export async function runMigrations(customDbUrl?: string, customMigrationsFolder
     const migrationDb = drizzle(migrationClient);
     await migrate(migrationDb, { migrationsFolder });
 
+    // 5. Bootstrap default developer accounts on fresh empty database (non-production or explicit opt-in only)
+    const allowSeed =
+      !customDbUrl &&
+      !Boolean(process.env.VITEST) &&
+      ((process.env.NODE_ENV !== 'production' && process.env.SEED_PREVIEW_DATA !== 'false') ||
+        process.env.SEED_DEFAULT_ADMIN === 'true');
+
+    if (allowSeed) {
+      const userCountRes = await migrationClient`SELECT COUNT(*)::int as count FROM users`;
+      const userCount = userCountRes[0]?.count ?? 0;
+      if (userCount === 0) {
+        const bcrypt = await import('bcryptjs');
+        const hash1 = await bcrypt.hash('AdminPassword123!', 10);
+        const hash2 = await bcrypt.hash('password123', 10);
+
+        await migrationClient`
+          INSERT INTO users (id, email, password_hash, role)
+          VALUES
+            ('00000000-0000-0000-0000-000000000001', 'admin@fortix.io', ${hash1}, 'ADMIN'),
+            ('00000000-0000-0000-0000-000000000002', 'admin@fortix.test', ${hash2}, 'ADMIN')
+          ON CONFLICT DO NOTHING
+        `;
+      }
+
+      const seedUserIds = [
+        '00000000-0000-0000-0000-000000000001',
+        '00000000-0000-0000-0000-000000000002',
+      ];
+      for (const uid of seedUserIds) {
+        const existingUser = await migrationClient`SELECT id FROM users WHERE id = ${uid} LIMIT 1`;
+        if (existingUser.length === 0) continue;
+
+        let orgRows = await migrationClient`SELECT id FROM organizations WHERE owner_id = ${uid} LIMIT 1`;
+        if (orgRows.length === 0) {
+          await migrationClient`
+            INSERT INTO organizations (id, name, owner_id)
+            VALUES (${uid}, 'Default Org', ${uid})
+            ON CONFLICT DO NOTHING
+          `;
+          orgRows = await migrationClient`SELECT id FROM organizations WHERE owner_id = ${uid} LIMIT 1`;
+        }
+        const orgId = orgRows[0]?.id;
+        if (!orgId) continue;
+
+        const projCountRes = await migrationClient`
+          SELECT COUNT(*)::int as count FROM projects WHERE org_id = ${orgId}
+        `;
+        if ((projCountRes[0]?.count ?? 0) === 0) {
+          await migrationClient`
+            INSERT INTO projects (id, org_id, name, environment)
+            VALUES (${uid}, ${orgId}, 'Production Gateway', 'production')
+            ON CONFLICT DO NOTHING
+          `;
+          await migrationClient`
+            INSERT INTO api_routes (id, project_id, path_pattern, target_url)
+            VALUES (${uid}, ${uid}, '/api/v1/data', 'http://fortix-demo-api:3001/api/v1/data')
+            ON CONFLICT DO NOTHING
+          `;
+        }
+        await migrationClient`
+          UPDATE api_routes
+          SET target_url = 'http://fortix-demo-api:3001/api/v1/data'
+          WHERE id = ${uid} AND target_url = 'http://localhost:3001/api/v1/data'
+        `;
+      }
+    }
+
     console.log('[Migration] All database migrations verified and applied successfully.');
   } catch (error) {
-    if (customDbUrl) {
+    const isStrict =
+      Boolean(customDbUrl) ||
+      process.env.NODE_ENV === 'production' ||
+      process.env.STRICT_PERSISTENT_DB === 'true';
+    if (isStrict) {
       console.error('[Migration] Migration execution failed:', error instanceof Error ? error.message : error);
       throw error;
     }

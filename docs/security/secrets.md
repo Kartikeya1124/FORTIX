@@ -1,40 +1,72 @@
-# FortiX Secrets Management & Credential Lifecycle Policy
+# FortiX Secrets, Environment Flags & Credential Rotation Guide
 
-## 1. Secrets Inventory & Classification
+FortiX separates **plain runtime configuration flags**, **locally generated cryptographic secrets**, and **infrastructure connection credentials**. None of the application flags or cryptographic keys require paid third-party subscriptions—they are configured or generated locally on your machine for free.
 
-| Secret Name | Purpose | Storage Mechanism | Rotation Lifecycle | Scope & Entropy Requirements |
-|---|---|---|---|---|
-| `JWT_SECRET` | Signs Control Plane access & refresh tokens | Server environment variable (`.env`) | Rotated quarterly or on compromise | Min 32 characters, high entropy, rejected on default values |
-| `FortiX API Keys` (`fx_*`) | Authenticates external clients to Gateway | Persistent PostgreSQL (bcrypt hashed secret only) | On-demand via `/api/control/keys/:id/rotate` | Format: `fx_<env>_<keyId>_<secret>`, 32-byte cryptographic random secret |
-| `GEMINI_API_KEY` | Server-side AI evidence analysis | Server environment variable (`process.env.GEMINI_API_KEY`) | Managed via Google Cloud Console | Server-side only, never transmitted to browser or logged |
-| `DATABASE_URL` | PostgreSQL connection credentials | Server environment variable (`.env`) | Managed by Cloud SQL / Infrastructure | Strictly enforced in production; in-memory fallback rejected |
-| `REDIS_URL` | Redis distributed cache & BullMQ queue | Server environment variable (`.env`) | Managed by Infrastructure provider | Required for cross-process durable job execution |
+> **Security Rule**: Never commit `.env` to Git, and never paste live replacement passwords, database URLs with credentials, or tokens into chat prompts, issues, or logs.
 
 ---
 
-## 2. FortiX-Issued API Key Security Architecture
+## 1. Where Every Environment Variable Comes From (100% Free)
 
-1. **Cryptographic Generation**:
-   - Format: `fx_${environment}_${keyId}_${secret}`
-   - `keyId`: 8-byte cryptographically random hex (16 chars). Acts as a public database lookup index.
-   - `secret`: 32-byte cryptographically random hex (64 chars, 256-bit entropy).
-2. **One-Time Display**:
-   - The raw composite key is returned to the caller **exactly once** in the HTTP 201 response body upon creation or rotation.
-   - It is never stored in plaintext anywhere in the database, memory cache, or log stream.
-3. **Storage Security**:
-   - Only `secretHash` (bcrypt cost 10) is persisted in the `api_keys` table.
-   - Even in the event of an SQL read injection or database snapshot leak, raw keys cannot be recovered.
-4. **Fast In-Memory Cache Security**:
-   - Verified keys are cached in memory for 30 seconds to prevent bcrypt CPU threadpool starvation under high proxy throughput.
-   - Key revocation or rotation broadcasts a Redis Pub/Sub invalidation message across all gateway nodes (`publishKeyRevocation`), purging cached entries immediately.
-5. **Quota Enforcement**:
-   - Strictly limits each API project to a maximum of 25 active keys to prevent key sprawl and database bloat.
+| Variable | Type | Free Value / How to Get It |
+| :--- | :--- | :--- |
+| `STRICT_PERSISTENT_DB` | Boolean Flag | Plain text setting you choose: `true` when connected to real PostgreSQL (Docker or Supabase); `false` for standalone local in-memory mode. |
+| `START_INTERNAL_WORKER` | Boolean Flag | Plain text setting: `true` when running a single-process server (`npm run dev`); `false` in multi-container `docker-compose.yml` where the `worker` container runs separately. |
+| `START_DEMO_API` | Boolean Flag | Plain text setting: `true` in local development to start the demo upstream target on port `3001`; `false` in production/staging. |
+| `REDIS_FAILURE_BEHAVIOR` | Policy Mode | Plain text setting: `fail-closed` (recommended security default; blocks rate-limited traffic if Redis is unreachable) or `fail-open` (development only). |
+| `JWT_SECRET` | Local Secret | **100% Free — Generated offline on your computer** (minimum 32 characters, high entropy). Generated automatically by `npm run setup:local` or `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
+| `ENCRYPTION_KEY` | Local Secret | **100% Free — Generated offline on your computer** (32 bytes / 64 hex characters for AES-256). Generated automatically by `npm run setup:local` or `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
+| `POSTGRES_USER` | DB Username | Local Docker: `fortix` (free, chosen by you). Supabase Free Tier: `postgres.<project-ref>` (from Supabase **Connect -> Session Pooler**). |
+| `POSTGRES_DB` | DB Name | Local Docker: `fortix_db` (free, chosen by you). Supabase Free Tier: `postgres`. |
+| `POSTGRES_PASSWORD` | DB Password | Local Docker: generated free on your PC (`node -e "console.log(require('crypto').randomBytes(16).toString('hex'))"`). Supabase Free Tier: set/reset in **Supabase Dashboard -> Project Settings -> Database -> Database password**. |
 
 ---
 
-## 3. Secret Protection & Anti-Leakage Guardrails
+## 2. One-Command Free Local Setup (Windows PowerShell, macOS & Linux Bash)
 
-- **Zero Secrets in Source Control**: All test tokens in test suites are generated dynamically at test runtime (`crypto.randomBytes(32)`).
-- **Log Sanitization**: Pino HTTP and application loggers explicitly redact `authorization`, `cookie`, `x-api-key`, and `password`.
-- **AI Evidence Redaction**: `sanitizeEvidenceForAi()` strips all authentication headers, URL query credentials, and internal hostnames before dispatching telemetry to `@google/genai`.
-- **Graceful Unconfigured Handling**: If `GEMINI_API_KEY` is not present, FortiX continues normal execution and marks AI analysis as unavailable rather than leaking errors.
+Because FortiX includes a cross-platform Node.js generator (`scripts/setup-local.js`), the exact same command works in **Windows PowerShell**, **Command Prompt**, **macOS Terminal**, and **Linux Bash**:
+
+### Option A: Standalone Local Development (No Docker or Cloud Needed)
+```bash
+npm run setup:local
+npm run dev
+```
+
+### Option B: Reproducible Local Docker Staging (`postgres` + `redis` + `api` + `worker`)
+Works in both **Bash** and **Windows PowerShell**:
+```bash
+npm run setup:local -- --staging --force
+docker compose up --build -d
+```
+
+### Manual Secret Generation Commands (If Needed)
+- **Windows PowerShell (using Node.js — built in)**:
+  ```powershell
+  node -e "console.log('JWT_SECRET=' + require('crypto').randomBytes(32).toString('hex'))"
+  node -e "console.log('ENCRYPTION_KEY=' + require('crypto').randomBytes(32).toString('hex'))"
+  node -e "console.log('POSTGRES_PASSWORD=' + require('crypto').randomBytes(16).toString('hex'))"
+  ```
+- **Linux / macOS / Git Bash**:
+  ```bash
+  openssl rand -hex 32   # Use for JWT_SECRET
+  openssl rand -hex 32   # Use for ENCRYPTION_KEY
+  openssl rand -hex 16   # Use for POSTGRES_PASSWORD
+  ```
+
+---
+
+## 3. Mandatory Credential Rotation Protocol (Exposed Credentials)
+
+If any credential is ever pasted into chat, screenshots, logs, or commits, treat it as compromised and rotate immediately:
+
+1. **Supabase PostgreSQL Password**:
+   - Open **Supabase Dashboard -> Project Settings -> Database -> Reset database password**.
+   - Generate a strong password and update `DATABASE_URL` in your local `.env` only (percent-encode special characters such as `@` $\rightarrow$ `%40`).
+2. **Upstash Redis Credential**:
+   - Open **Upstash Console -> Database Details -> Reset Password** (or delete and recreate the free Redis database).
+   - Update `REDIS_URL` (`rediss://default:<new-token>@<endpoint>.upstash.io:6379`) in your local `.env` only.
+3. **External Database / Platform API Keys (e.g., Neon / Management API keys)**:
+   - Revoke the exposed API key in the provider's account settings -> **API Keys**.
+4. **Verification**:
+   - Confirm old credentials fail authentication (`ECONNREFUSED` / `WRONGPASS` / `28P01 password authentication failed`).
+   - Run `npm run db:migrate` and verify `GET /health/ready` returns `200 OK` with your local `.env`.

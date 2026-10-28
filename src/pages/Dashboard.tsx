@@ -5,6 +5,8 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'rec
 import { motion } from 'motion/react';
 import { SystemLogs } from '../components/SystemLogs.js';
 import { useProject } from '../context/ProjectContext.js';
+import { Link } from 'react-router-dom';
+import { Globe, ArrowRight } from 'lucide-react';
 
 export default function Dashboard() {
   const { currentProject } = useProject();
@@ -82,6 +84,25 @@ export default function Dashboard() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
           <MetricCard title="API Health" value={dynamicHealth.toString()} subtext="%" progress={dynamicHealth} progressColor="bg-blue-500" />
         </motion.div>
+      </div>
+
+      <div className="bg-card border border-subtle rounded-xl px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-start sm:items-center gap-3 min-w-0">
+          <Globe size={18} className="text-primary shrink-0 mt-0.5 sm:mt-0" />
+          <div className="min-w-0">
+            <span className="text-sm font-semibold text-strong">Public API Directory</span>
+            <span className="text-xs text-muted ml-2">
+              Browse 814 public APIs across 29 categories, filter by auth or CORS requirements, and jump straight to their official docs.
+            </span>
+          </div>
+        </div>
+        <Link
+          to="/directory"
+          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-primary text-inverted text-xs font-semibold rounded-lg hover:opacity-90 transition-opacity whitespace-nowrap shrink-0"
+        >
+          <span>Open Directory</span>
+          <ArrowRight size={14} />
+        </Link>
       </div>
 
       {activeExp && (

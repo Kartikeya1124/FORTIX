@@ -1,9 +1,10 @@
 import { Login } from "./components/Login.js";
 import React, { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Link, Outlet } from 'react-router-dom';
-import { Activity, Shield, Server, Play, Settings as SettingsIcon, ShieldAlert, BarChart, Menu, X, LogOut, AlertTriangle, PanelLeft , Moon, Sun } from 'lucide-react';
+import { BrowserRouter, Routes, Route, Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Activity, Shield, Server, Play, Settings as SettingsIcon, ShieldAlert, BarChart, Menu, X, LogOut, AlertTriangle, PanelLeft, Moon, Sun, Globe } from 'lucide-react';
 import Dashboard from './pages/Dashboard.js';
 import APIs from './pages/APIs.js';
+import PublicApiDirectory from './pages/PublicApiDirectory.js';
 import Experiments from './pages/Experiments.js';
 import Security from './pages/Security.js';
 import Resilience from './pages/Resilience.js';
@@ -19,6 +20,8 @@ import { ProjectSwitcher } from './components/ProjectSwitcher.js';
 
 function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } | null }) {
   const [searchQuery, setSearchQuery] = React.useState('');
+  const navigate = useNavigate();
+  const location = useLocation();
   const [theme, setTheme] = React.useState(() => localStorage.getItem("fortix_theme") || "light");
 
   React.useEffect(() => {
@@ -39,7 +42,7 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
     <div className="flex flex-col h-screen w-full bg-transparent text-base-text font-sans overflow-hidden p-0 sm:p-3 md:p-4 lg:p-6">
       <div className="flex flex-col h-full w-full bg-base rounded-none sm:rounded-2xl md:rounded-3xl border-0 sm:border border-subtle overflow-hidden shadow-glass relative isolate">
         <CommandPalette isOpen={isPaletteOpen} setIsOpen={setIsPaletteOpen} toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} />
-        
+
         {/* Health Banner */}
         {isDegraded && (
           <div className="bg-red-900/40 text-red-400 text-xs md:text-sm font-bold px-4 py-2 text-center border-b border-red-500/50 flex items-center justify-center gap-2 shrink-0 z-50">
@@ -53,7 +56,7 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
         {/* Header */}
         <header className="flex items-center justify-between px-3 sm:px-4 md:px-6 py-3.5 border-b border-subtle bg-surface shrink-0 gap-2 sm:gap-4">
           <div className="flex items-center gap-2 sm:gap-3 md:gap-4 min-w-0 shrink">
-            <button 
+            <button
               className="md:hidden text-muted hover:text-strong transition shrink-0"
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             >
@@ -70,14 +73,19 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
               <ProjectSwitcher />
             </div>
           </div>
-          
+
           {/* Global Search Bar with responsive flex sizing */}
           <div className="flex-1 min-w-[100px] max-w-xs sm:max-w-sm md:max-w-md mx-1 sm:mx-2 md:mx-4">
-            <input 
-              type="text" 
-              placeholder="Search or jump to... (Ctrl+K)" 
+            <input
+              type="text"
+              placeholder="Search APIs or press Enter for 800+ Public APIs... (Ctrl+K)"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && searchQuery.trim() && location.pathname !== '/directory') {
+                  navigate(`/directory?q=${encodeURIComponent(searchQuery.trim())}`);
+                }
+              }}
               className="w-full bg-base border border-subtle text-xs sm:text-sm text-strong px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl focus:outline-none focus:border-primary transition-colors truncate"
             />
           </div>
@@ -123,25 +131,26 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
         <main className="flex flex-1 overflow-hidden relative">
           {/* Mobile Overlay */}
           {isSidebarOpen && (
-            <div 
-              className="absolute inset-0 bg-base/80 z-40 md:hidden" 
-              onClick={() => setIsSidebarOpen(false)} 
+            <div
+              className="absolute inset-0 bg-base/80 z-40 md:hidden"
+              onClick={() => setIsSidebarOpen(false)}
             />
           )}
 
           {/* Sidebar */}
           <aside className={`absolute z-50 md:relative h-full w-56 border-r border-subtle bg-transparent p-4 flex flex-col gap-2 shrink-0 transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
             <div className="text-[11px] font-bold text-muted uppercase tracking-widest mb-2 px-2">Navigation</div>
-            <nav className="flex-1 space-y-1">
-              <NavItem to="/" icon={<Activity size={16} />} label="Dashboard" onClick={() => setIsSidebarOpen(false)} />
-              <NavItem to="/apis" icon={<Server size={16} />} label="APIs" onClick={() => setIsSidebarOpen(false)} />
-              <NavItem to="/security" icon={<Shield size={16} />} label="Security" onClick={() => setIsSidebarOpen(false)} />
-              <NavItem to="/experiments" icon={<Play size={16} />} label="Experiments" onClick={() => setIsSidebarOpen(false)} />
-              <NavItem to="/resilience" icon={<BarChart size={16} />} label="Resilience" onClick={() => setIsSidebarOpen(false)} />
-              <NavItem to="/threats" icon={<ShieldAlert size={16} />} label="Threats" onClick={() => setIsSidebarOpen(false)} />
-              <NavItem to="/topology" icon={<Activity size={16} />} label="Topology" onClick={() => setIsSidebarOpen(false)} />
-              <NavItem to="/verifications" icon={<Shield size={16} />} label="Verifications" onClick={() => setIsSidebarOpen(false)} />
-              <NavItem to="/settings" icon={<SettingsIcon size={16} />} label="Settings" onClick={() => setIsSidebarOpen(false)} />
+            <nav className="flex-1 space-y-1 overflow-y-auto">
+              <NavItem to="/" icon={<Activity size={16} />} label="Dashboard" active={location.pathname === '/'} onClick={() => setIsSidebarOpen(false)} />
+              <NavItem to="/apis" icon={<Server size={16} />} label="Protected APIs" active={location.pathname === '/apis'} onClick={() => setIsSidebarOpen(false)} />
+              <NavItem to="/directory" icon={<Globe size={16} />} label="Public APIs" active={location.pathname === '/directory'} onClick={() => setIsSidebarOpen(false)} />
+              <NavItem to="/security" icon={<Shield size={16} />} label="Security" active={location.pathname === '/security'} onClick={() => setIsSidebarOpen(false)} />
+              <NavItem to="/experiments" icon={<Play size={16} />} label="Experiments" active={location.pathname === '/experiments'} onClick={() => setIsSidebarOpen(false)} />
+              <NavItem to="/resilience" icon={<BarChart size={16} />} label="Resilience" active={location.pathname === '/resilience'} onClick={() => setIsSidebarOpen(false)} />
+              <NavItem to="/threats" icon={<ShieldAlert size={16} />} label="Threats" active={location.pathname === '/threats'} onClick={() => setIsSidebarOpen(false)} />
+              <NavItem to="/topology" icon={<Activity size={16} />} label="Topology" active={location.pathname === '/topology'} onClick={() => setIsSidebarOpen(false)} />
+              <NavItem to="/verifications" icon={<Shield size={16} />} label="Verifications" active={location.pathname === '/verifications'} onClick={() => setIsSidebarOpen(false)} />
+              <NavItem to="/settings" icon={<SettingsIcon size={16} />} label="Settings" active={location.pathname === '/settings'} onClick={() => setIsSidebarOpen(false)} />
             </nav>
             <div className="mt-auto p-3 bg-elevated rounded-lg border border-subtle shadow-glass">
               <div className="text-[10px] text-muted uppercase font-bold mb-1">Environment</div>
@@ -159,7 +168,7 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
             </div>
           </div>
         </main>
-        
+
         <footer className="px-6 py-2.5 border-t border-subtle bg-surface flex justify-between items-center shrink-0">
           <div className="text-[10px] text-muted">© 2026 Faultline Labs // FortiX Continuous Resilience & API Security Gateway</div>
         </footer>
@@ -168,11 +177,19 @@ function Layout({ healthStatus }: { healthStatus: { db: string, redis: string } 
   );
 }
 
-function NavItem({ to, icon, label, onClick }: { to: string, icon: React.ReactNode, label: string, onClick?: () => void }) {
+function NavItem({ to, icon, label, active, onClick }: { to: string, icon: React.ReactNode, label: string, active?: boolean, onClick?: () => void }) {
   return (
-    <Link to={to} onClick={onClick} className="flex items-center gap-3 px-3 py-2 rounded-xl text-muted hover:bg-hover hover:text-strong transition-colors border-l-2 border-transparent">
-      <span className="w-4 h-4 text-center">{icon}</span>
-      <span className="text-sm font-medium">{label}</span>
+    <Link
+      to={to}
+      onClick={onClick}
+      className={`flex items-center gap-3 px-3 py-2 rounded-xl transition-colors whitespace-nowrap ${
+        active
+          ? 'bg-primary text-inverted font-semibold'
+          : 'text-muted hover:bg-hover hover:text-strong'
+      }`}
+    >
+      <span className="w-4 h-4 flex items-center justify-center shrink-0">{icon}</span>
+      <span className="text-sm truncate">{label}</span>
     </Link>
   );
 }
@@ -252,6 +269,7 @@ function SocketWrapper({ children }: { children: React.ReactNode }) {
             <Route path="/" element={<Layout healthStatus={healthStatus} />}>
               <Route index element={<Dashboard />} />
               <Route path="apis" element={<APIs />} />
+              <Route path="directory" element={<PublicApiDirectory />} />
               <Route path="security" element={<Security />} />
               <Route path="experiments" element={<Experiments />} />
               <Route path="resilience" element={<Resilience />} />

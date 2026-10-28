@@ -1,8 +1,7 @@
 # FortiX Engineering Progress Record & Checkpoint Log
 
-- **Baseline Commit**: `cd4a4f11a435c5dcbb1f162cc59464e4eb6a8c3c`
-- **Current Verified Remote HEAD**: `cd4a4f11a435c5dcbb1f162cc59464e4eb6a8c3c` on `main` (`mr-vdnt/FortiX`)
-- **Remote Push Status**: Verified live on GitHub `origin/main`
+- **Baseline Remote Commit**: `8a761180f4ae2f42c2e249dce42ba22178cfa80b`
+- **Current Verified Remote HEAD (`origin/main`)**: `8a761180f4ae2f42c2e249dce42ba22178cfa80b` (`mr-vdnt/FortiX`)
 
 ---
 
@@ -20,16 +19,25 @@
   - `curl http://localhost:3000/api/health/ready`: **200 OK**.
 - **Security & Secret Scan**:
   - Verified 0 secrets, credentials, or tokens in git diff or code files.
+
+---
+
+## Checkpoint: Persistent Cloud PostgreSQL & TLS Redis Support + Public API Directory (814 APIs) + Phase 0 Containment
+- **Objective**:
+  1. Support persistent cloud PostgreSQL poolers (`prepare: false`, TLS, `@` password percent-encoding) and TLS Redis (`rediss://`) across BullMQ, Redis Streams, and Pub/Sub key invalidation, plus register `0003_workflow_runs` in Drizzle's migration journal.
+  2. Integrate the 814-entry Public API Directory (`/directory`, Sidebar, Dashboard, Protected APIs, and `Ctrl+K` Command Palette) with strict `http:`/`https:` URL validation (`rel="noopener noreferrer"`) and explicit user confirmation before registering any upstream route.
+  3. Complete Phase 0 credential containment: purge previously chat-pasted credentials from local sandbox `.env`, ignore ephemeral chat paste attachments in `.gitignore`, enhance `scripts/setup-local.js` (`--staging` / `--force`), and document cross-platform (Bash + Windows PowerShell) secret generation & rotation in `docs/security/secrets.md`.
+- **Files Modified / Created**:
+  - `src/db/url.ts`, `src/db/index.ts`, `src/db/migrate.ts`, `drizzle/meta/_journal.json`, `demo-api.ts`
+  - `src/redis.ts`, `src/worker.ts`, `src/experiments/queue.ts`, `src/lib/webhooks.ts`, `src/lib/key-invalidation.ts`, `src/telemetry-worker.ts`, `src/api/system.ts`
+  - `src/types/publicApi.ts`, `src/data/publicApisDataset.ts`, `src/pages/PublicApiDirectory.tsx`, `src/App.tsx`, `src/components/CommandPalette.tsx`, `src/pages/APIs.tsx`, `src/pages/Dashboard.tsx`
+  - `.gitignore`, `.env.example`, `scripts/setup-local.js`, `docs/security/secrets.md`
+  - `tests/unit/migrations.test.ts`, `tests/unit/production-hardening.test.ts`
+- **Verification**:
+  - `npx vitest run tests/unit/production-hardening.test.ts tests/unit/migrations.test.ts tests/unit/ssrf.test.ts tests/unit/fortix-keys.test.ts`: **4 passed (4/4 suites), 45 passed (45/45 tests)**, 0 failed.
+  - `npm run lint` (`tsc --noEmit`) & `npm run build`: **Clean pass** (0 errors).
+  - Secret scan & `git diff --check`: **0 leaked credentials, 0 whitespace/patch errors**.
+- **Environment Push Blocker & Sync Path**:
+  - Local Git repository initialized against `origin/main` (`8a761180f4ae2f42c2e249dce42ba22178cfa80b`) and committed cleanly on local `main`. Because the AI Studio container shell does not hold GitHub push credentials (by design, to avoid storing PATs in container shells), push to `origin/main` via Google AI Studio's top-right **GitHub Sync (Commit & Push)** button.
 - **Next Action**:
-- **Environment Status & Blockers**:
-  - AI Studio sandbox container does not have a nested Docker daemon (`docker: not found`). Full multi-container Docker staging verification must be executed on a Docker-capable host using the documented reproducible compose command:
-    ```bash
-    export POSTGRES_PASSWORD=$(openssl rand -hex 16)
-    export JWT_SECRET=$(openssl rand -hex 32)
-    export ENCRYPTION_KEY=$(openssl rand -hex 32)
-    docker compose up --build -d
-    ```
-- **Security & Secret Scan**:
-  - Verified 0 secrets, credentials, or tokens in git diff or code files.
-- **Next Action**:
-  - Commit and push checkpoint to GitHub `origin/main`, verify remote SHA, and rehearse end-to-end API key verification on external Docker host.
+  - Rotate previously exposed cloud database/Redis credentials in provider dashboards, sync this checkpoint to GitHub via AI Studio's GitHub toolbar button, then proceed to **Phase 1 (Express Route & Attack-Surface Inventory + Tenant Isolation Audit)**.
