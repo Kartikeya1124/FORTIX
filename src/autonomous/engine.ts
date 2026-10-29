@@ -11,6 +11,7 @@ import { artifactStorage } from '../storage/index.js';
 import { buildPdfBuffer } from '../api/reports.js';
 import { broadcast } from '../socket.js';
 import { transitionWorkflowStatus, WorkflowStatus, InvalidStateTransitionError } from './stateMachine.js';
+import { resolveGatewayPort } from '../lib/port.js';
 
 export type { WorkflowStatus };
 export type WorkflowProfile = 'security-audit' | 'resilience-stress' | 'failover-recovery' | 'full-verification';
@@ -244,7 +245,7 @@ export async function executeAutonomousRun(runId: string) {
       message: `Run-scoped FortiX key provisioned with key prefix ${tempKey.rawKey.slice(0, 16)}...`,
     });
 
-    const port = process.env.PORT || 3000;
+    const port = resolveGatewayPort();
     const proxyUrl = `http://127.0.0.1:${port}/proxy/${routeId}`;
     const baseHeaders: Record<string, string> = {
       'x-api-key': tempKey.rawKey,

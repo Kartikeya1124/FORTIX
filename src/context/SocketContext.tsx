@@ -59,16 +59,10 @@ export function SocketProvider({ children, projectId }: { children: React.ReactN
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem('fortix_token');
-    if (!token) {
-      setConnectionState('disconnected');
-      return;
-    }
-
     setConnectionState('connecting');
 
     const s = io(window.location.origin, {
-      auth: { token },
+      withCredentials: true,
       transports: ['polling', 'websocket'],
       reconnectionAttempts: 10,
       reconnectionDelay: 1000,

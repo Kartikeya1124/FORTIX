@@ -152,6 +152,13 @@ let streamSeq = 0;
 
 (sharedMock as any).xack = async () => 1;
 
+let lastRedisConnectionError: string | null = null;
+let lastRedisWarnAt = 0;
+
+export function getLastRedisError(): string | null {
+  return lastRedisConnectionError;
+}
+
 function createRedisConnection(): Redis {
   if (isRealRedisActive) {
     const isTls = resolvedRedisUrl.startsWith('rediss://');
@@ -173,22 +180,20 @@ function createRedisConnection(): Redis {
     });
 
     client.on('error', (err: any) => {
-      const msg = err?.message || '';
-      const code = err?.code || '';
-      if (
-        code === 'ECONNREFUSED' ||
-        code === 'EAI_AGAIN' ||
-        code === 'ENOTFOUND' ||
-        code === 'ETIMEDOUT' ||
-        code === 'ECONNRESET' ||
-        msg.includes('ECONNREFUSED') ||
-        msg.includes('EAI_AGAIN') ||
-        msg.includes('getaddrinfo') ||
-        msg.includes('ENOTFOUND')
-      ) {
-        return;
+      const rawMsg = String(err?.message || err || 'Redis connection error');
+      const sanitized = rawMsg
+        .replace(/rediss?:\/\/[^\s'"]+/gi, '[REDACTED_REDIS_URI]')
+        .slice(0, 200);
+      lastRedisConnectionError = sanitized;
+      const now = Date.now();
+      if (now - lastRedisWarnAt >= 30000) {
+        lastRedisWarnAt = now;
+        console.warn(`[Redis] Degraded connection state (${err?.code || 'ERROR'}): ${sanitized}`);
       }
-      console.error('[Redis] Error:', err?.message || err);
+    });
+
+    client.on('ready', () => {
+      lastRedisConnectionError = null;
     });
 
     return client;

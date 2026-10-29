@@ -90,7 +90,7 @@ export function generateWebhookSignature(
 
 /**
  * Verifies an HMAC-SHA256 signature against the given payload.
- * Defends against replay attacks with configurable timestamp tolerance.
+ * Strictly requires a positive integer timestamp within the replay tolerance window.
  */
 export function verifyWebhookSignature(
   payload: string | Record<string, any>,
@@ -116,27 +116,33 @@ export function verifyWebhookSignature(
     }
   }
 
-  if (!signatureHex) {
+  if (!signatureHex || !/^[a-f0-9]{64}$/i.test(signatureHex)) {
     return { valid: false, reason: 'Invalid signature header format' };
   }
 
-  const timestamp = timestampStr ? parseInt(timestampStr, 10) : null;
-  if (timestamp !== null && !isNaN(timestamp)) {
-    const currentTimestamp = Math.floor(Date.now() / 1000);
-    if (Math.abs(currentTimestamp - timestamp) > toleranceSeconds) {
-      return { valid: false, reason: 'Timestamp outside allowable tolerance window' };
-    }
+  if (!timestampStr || !/^\d+$/.test(timestampStr)) {
+    return { valid: false, reason: 'Missing or invalid signature timestamp' };
+  }
+
+  const timestamp = parseInt(timestampStr, 10);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return { valid: false, reason: 'Missing or invalid signature timestamp' };
+  }
+
+  const currentTimestamp = Math.floor(Date.now() / 1000);
+  if (Math.abs(currentTimestamp - timestamp) > toleranceSeconds) {
+    return { valid: false, reason: 'Timestamp outside allowable tolerance window' };
   }
 
   const serialized = typeof payload === 'string' ? payload : JSON.stringify(payload);
-  const signedPayload = timestamp ? `${timestamp}.${serialized}` : serialized;
+  const signedPayload = `${timestamp}.${serialized}`;
   const expectedSignature = crypto
     .createHmac('sha256', secret)
     .update(signedPayload)
     .digest('hex');
 
   const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
-  const receivedBuffer = Buffer.from(signatureHex, 'utf8');
+  const receivedBuffer = Buffer.from(signatureHex.toLowerCase(), 'utf8');
 
   if (expectedBuffer.length !== receivedBuffer.length) {
     return { valid: false, reason: 'Signature length mismatch' };
@@ -146,8 +152,31 @@ export function verifyWebhookSignature(
   return { valid: matches, reason: matches ? undefined : 'HMAC signature verification failed' };
 }
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_WEBHOOK_REDIRECTS = 3;
+
+async function resolveSigningSecret(jobData: WebhookJobData): Promise<string | null> {
+  if (jobData.secret && jobData.secret !== '[REDACTED]') {
+    return jobData.secret;
+  }
+  if (!jobData.webhookId || !jobData.projectId) {
+    return null;
+  }
+  try {
+    const [wh] = await db
+      .select({ secret: webhooks.secret })
+      .from(webhooks)
+      .where(and(eq(webhooks.id, jobData.webhookId), eq(webhooks.projectId, jobData.projectId)))
+      .limit(1);
+    return wh?.secret || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Executes a single HTTP webhook delivery attempt with SSRF security checks,
+ * Executes a single HTTP webhook delivery attempt with SSRF security checks
+ * (including manual redirect validation to block 302/307 SSRF),
  * response capturing, and persistent delivery audit logging.
  */
 export async function executeWebhookDelivery(
@@ -158,8 +187,8 @@ export async function executeWebhookDelivery(
   const maxAttempts = jobData.maxAttempts ?? 5;
   const startTime = Date.now();
 
-  // 1. Strict SSRF check before making HTTP request
-  const ssrfCheck = await securityGuard.validateTarget(jobData.url);
+  // 1. Strict SSRF check before making HTTP request (disallow internal demo API on webhooks)
+  const ssrfCheck = await securityGuard.validateTarget(jobData.url, { allowDemoApi: false });
   if (!ssrfCheck.isValid) {
     const errorMsg = `SSRF blocked webhook URL: ${ssrfCheck.reason || 'Restricted target'}`;
     const record: WebhookDeliveryRecord = {
@@ -184,8 +213,9 @@ export async function executeWebhookDelivery(
   const timestamp = Math.floor(Date.now() / 1000);
   const serializedBody = JSON.stringify(jobData.payload);
   let signatureHeader = '';
-  if (jobData.secret) {
-    const sig = generateWebhookSignature(serializedBody, jobData.secret, timestamp);
+  const signingSecret = await resolveSigningSecret(jobData);
+  if (signingSecret) {
+    const sig = generateWebhookSignature(serializedBody, signingSecret, timestamp);
     signatureHeader = sig.signatureHeader;
   }
 
@@ -212,24 +242,68 @@ export async function executeWebhookDelivery(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-    const response = await fetch(jobData.url, {
-      method: 'POST',
-      headers,
-      body: serializedBody,
-      signal: controller.signal,
-    }).finally(() => clearTimeout(timeoutId));
+    try {
+      let currentUrl = jobData.url;
+      let response: any = null;
 
-    statusCode = response.status;
-    const text = await response.text().catch(() => '');
-    responseBody = text.slice(0, 2048); // Cap response body at 2KB
+      for (let hop = 0; hop <= MAX_WEBHOOK_REDIRECTS; hop++) {
+        response = await fetch(currentUrl, {
+          method: 'POST',
+          headers,
+          body: serializedBody,
+          redirect: 'manual',
+          signal: controller.signal,
+        });
 
-    if (response.ok) {
-      success = true;
-    } else {
-      errorMessage = `Webhook endpoint returned HTTP ${statusCode}`;
+        if (REDIRECT_STATUSES.has(response.status)) {
+          const locationHeader = response.headers?.get?.('location');
+          if (!locationHeader) {
+            statusCode = response.status;
+            errorMessage = `Webhook endpoint returned redirect HTTP ${response.status} without Location header`;
+            break;
+          }
+          if (hop >= MAX_WEBHOOK_REDIRECTS) {
+            statusCode = response.status;
+            errorMessage = `Webhook exceeded maximum redirect limit (${MAX_WEBHOOK_REDIRECTS})`;
+            break;
+          }
+
+          let nextUrl: string;
+          try {
+            nextUrl = new URL(locationHeader, currentUrl).toString();
+          } catch {
+            statusCode = 400;
+            errorMessage = 'SSRF blocked webhook redirect: Malformed redirect Location URL';
+            break;
+          }
+
+          const redirectCheck = await securityGuard.validateTarget(nextUrl, { allowDemoApi: false });
+          if (!redirectCheck.isValid) {
+            statusCode = 400;
+            errorMessage = `SSRF blocked webhook redirect: ${redirectCheck.reason || 'Restricted redirect target'}`;
+            break;
+          }
+
+          currentUrl = nextUrl;
+          continue;
+        }
+
+        statusCode = response.status;
+        const text = typeof response.text === 'function' ? await response.text().catch(() => '') : '';
+        responseBody = text.slice(0, 2048);
+
+        if (response.ok) {
+          success = true;
+        } else {
+          errorMessage = `Webhook endpoint returned HTTP ${statusCode}`;
+        }
+        break;
+      }
+    } finally {
+      clearTimeout(timeoutId);
     }
   } catch (fetchErr: any) {
-    if (fetchErr.name === 'AbortError') {
+    if (fetchErr?.name === 'AbortError') {
       errorMessage = 'Webhook request timed out after 10000ms';
     } else {
       errorMessage = fetchErr?.message || 'Network error during webhook dispatch';
@@ -290,9 +364,35 @@ async function recordDeliveryInDb(record: WebhookDeliveryRecord): Promise<void> 
       createdAt: new Date(record.createdAt),
     });
   } catch (dbErr) {
-    // Gracefully handle local/test environments where tables may be virtual
     logger.debug({ err: dbErr }, '[Webhooks] Failed to persist webhook delivery in Postgres, stored in memory.');
   }
+}
+
+function dispatchFallbackWebhookRunner(deliveryId: string, jobData: WebhookJobData) {
+  setTimeout(async () => {
+    let currentAttempt = 1;
+    const maxAttempts = jobData.maxAttempts ?? 5;
+    while (currentAttempt <= maxAttempts) {
+      try {
+        await executeWebhookDelivery(jobData, currentAttempt);
+        break;
+      } catch (err: any) {
+        if (currentAttempt >= maxAttempts) {
+          await recordDlqFailure({
+            jobId: deliveryId,
+            queueName: 'fortix-webhooks',
+            jobName: 'deliver-webhook',
+            data: { ...jobData, secret: jobData.secret ? '[REDACTED]' : null },
+            failedReason: err?.message || 'Webhook delivery failed after 5 exponential attempts',
+            stacktrace: err?.stack ? [err.stack] : [],
+            attemptsMade: maxAttempts,
+            maxAttempts,
+          });
+        }
+        currentAttempt++;
+      }
+    }
+  }, 50);
 }
 
 /**
@@ -334,36 +434,18 @@ export async function enqueueWebhookEvent(
         maxAttempts: 5,
       };
 
+      if (!isRealRedisActive) {
+        dispatchFallbackWebhookRunner(deliveryId, jobData);
+        jobIds.push(deliveryId);
+        continue;
+      }
+
       try {
         const job = await webhookQueue.add('deliver-webhook', jobData, DEFAULT_WEBHOOK_JOB_OPTIONS);
         if (job?.id) jobIds.push(job.id);
       } catch (queueErr) {
         logger.warn({ err: queueErr }, '[Webhooks] BullMQ add failed, executing via fallback runner');
-        // Asynchronous non-blocking direct dispatch with retry simulation
-        setTimeout(async () => {
-          let currentAttempt = 1;
-          const maxAttempts = 5;
-          while (currentAttempt <= maxAttempts) {
-            try {
-              await executeWebhookDelivery(jobData, currentAttempt);
-              break; // Succeeded!
-            } catch (err: any) {
-              if (currentAttempt >= maxAttempts) {
-                await recordDlqFailure({
-                  jobId: deliveryId,
-                  queueName: 'fortix-webhooks',
-                  jobName: 'deliver-webhook',
-                  data: jobData,
-                  failedReason: err?.message || 'Webhook delivery failed after 5 exponential attempts',
-                  stacktrace: err?.stack ? [err.stack] : [],
-                  attemptsMade: maxAttempts,
-                  maxAttempts: 5,
-                });
-              }
-              currentAttempt++;
-            }
-          }
-        }, 50);
+        dispatchFallbackWebhookRunner(deliveryId, jobData);
         jobIds.push(deliveryId);
       }
     }

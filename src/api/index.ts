@@ -1,8 +1,11 @@
 import { Express } from 'express';
+import cookieParser from 'cookie-parser';
 import { accountRouter } from "./account.js";
 import { authRouter } from "./auth.js";
-import { authenticate } from '../middleware/auth.js';
+import { adminRouter } from './admin.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { requireEntitlement } from '../middleware/entitlements.js';
+import { csrfProtectionMiddleware } from '../lib/cors-csrf.js';
 import { projectsRouter } from './projects.js';
 import { apiRoutesRouter } from './routes.js';
 import { apiKeysRouter } from './keys.js';
@@ -29,20 +32,32 @@ import { logger } from '../lib/logger.js';
 import { v4 as uuidv4 } from 'uuid';
 
 export function setupApiRoutes(app: Express) {
+  app.use(cookieParser());
   app.use((req, res, next) => {
     req.id = (req.headers['x-request-id'] as string) || uuidv4();
     res.setHeader('X-Request-ID', req.id);
     next();
   });
+  app.use('/api', csrfProtectionMiddleware);
 
-  // Prometheus Metrics Tracker
+  // Prometheus Metrics Tracker (with bounded route label cardinality)
   app.use((req, res, next) => {
     if (req.path === '/metrics') return next();
     const start = process.hrtime();
     res.on('finish', () => {
       const [seconds, nanoseconds] = process.hrtime(start);
       const durationInSeconds = seconds + nanoseconds / 1e9;
-      const routePath = req.baseUrl || req.route?.path || req.path || 'unknown';
+      let routePath = 'unmatched';
+      if (req.route?.path) {
+        const suffix = typeof req.route.path === 'string' && req.route.path !== '/' ? req.route.path : '';
+        routePath = `${req.baseUrl || ''}${suffix}` || '/';
+      } else if (req.baseUrl) {
+        routePath = req.baseUrl;
+      } else if (req.path.startsWith('/proxy/')) {
+        routePath = '/proxy/:routeId';
+      } else if (res.statusCode < 400) {
+        routePath = req.path || 'unknown';
+      }
       httpRequestsTotal.inc({
         method: req.method,
         route: routePath,
@@ -78,10 +93,20 @@ export function setupApiRoutes(app: Express) {
 
   app.get('/api/health/ready', async (req, res) => {
     const health = await getDependenciesHealth();
-    res.status(200).json({
-      status: health.status === 'healthy' ? 'ok' : 'degraded',
+    const strictDb = process.env.STRICT_PERSISTENT_DB === 'true';
+    const strictRedis = process.env.STRICT_REDIS_READINESS === 'true';
+    const isPostgresReady =
+      health.postgres.status === 'healthy' &&
+      (!strictDb || health.postgres.storageMode === 'persistent');
+    const isRedisReady = !strictRedis || health.redis.status === 'healthy';
+    const isReady = isPostgresReady && isRedisReady;
+
+    res.status(isReady ? 200 : 503).json({
+      status: isReady && health.status === 'healthy' ? 'ok' : isReady ? 'degraded' : 'unhealthy',
       postgres: health.postgres.status,
-      redis: health.redis.status
+      postgresStorageMode: health.postgres.storageMode,
+      redis: health.redis.status,
+      redisStorageMode: health.redis.storageMode,
     });
   });
 
@@ -131,6 +156,17 @@ export function setupApiRoutes(app: Express) {
   app.use('/api/control/topology', authenticate, requireEntitlement('TOPOLOGY'), topologyRouter);
   app.use('/api/control/dlq', authenticate, dlqRouter);
   app.use('/api/control/queue', authenticate, dlqRouter);
+  app.use('/api/control/admin', authenticate, requireAdmin, adminRouter);
   app.use('/api/control/runs', authenticate, workflowRunsRouter);
   app.use('/api', reportsRouter);
+
+  // Structured JSON 404 handler for unmatched /api/* routes (never fall through to HTML SPA)
+  app.use('/api', (req, res) => {
+    res.status(404).json({
+      error: 'Requested API endpoint does not exist.',
+      code: 'API_ROUTE_NOT_FOUND',
+      path: req.originalUrl,
+      requestId: req.id,
+    });
+  });
 }

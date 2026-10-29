@@ -1,9 +1,10 @@
 import { Server } from 'socket.io';
 import { Server as HttpServer } from 'http';
-import jwt from 'jsonwebtoken';
 import { db } from './db/index.js';
 import { projects, organizations } from './db/schema.js';
 import { eq, and } from 'drizzle-orm';
+import { verifyAndResolveJwtUser, hashJwtToken, extractRequestToken } from './lib/jwt-security.js';
+import { isOriginAllowed } from './lib/cors-csrf.js';
 
 let io: Server;
 
@@ -39,26 +40,91 @@ const eventBuffer = new Map<string, any[]>();
 let batchInterval: NodeJS.Timeout | null = null;
 let heartbeatInterval: NodeJS.Timeout | null = null;
 
+const socketsByUser = new Map<string, Set<any>>();
+const socketsByTokenHash = new Map<string, Set<any>>();
+
+export function disconnectSocketsForToken(rawToken?: string): number {
+  if (!rawToken) return 0;
+  const digest = hashJwtToken(rawToken);
+  const set = socketsByTokenHash.get(digest);
+  if (!set || set.size === 0) return 0;
+  let closed = 0;
+  for (const sock of Array.from(set)) {
+    try {
+      sock.disconnect(true);
+      closed++;
+    } catch {}
+  }
+  socketsByTokenHash.delete(digest);
+  return closed;
+}
+
+export function disconnectSocketsForUser(userId?: string): number {
+  if (!userId) return 0;
+  const set = socketsByUser.get(userId);
+  if (!set || set.size === 0) return 0;
+  let closed = 0;
+  for (const sock of Array.from(set)) {
+    try {
+      sock.disconnect(true);
+      closed++;
+    } catch {}
+  }
+  socketsByUser.delete(userId);
+  return closed;
+}
+
 export function setupWebSockets(server: HttpServer) {
-  io = new Server(server, { cors: { origin: '*' } });
-  
-  io.use((socket, next) => {
-    const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace('Bearer ', '');
-    if (!token) {
-       return next(new Error('Authentication error'));
-    }
-    
-    jwt.verify(token, process.env.JWT_SECRET || 'dev-secret', (err: any, decoded: any) => {
-      if (err) {
-         return next(new Error('Authentication error'));
+  io = new Server(server, {
+    cors: {
+      origin: (origin, callback) => {
+        if (isOriginAllowed(origin)) {
+          callback(null, true);
+        } else {
+          callback(new Error('Origin not allowed by CORS'));
+        }
+      },
+      credentials: true,
+    },
+  });
+
+  io.use(async (socket, next) => {
+    try {
+      const cookieOrHeaderToken = extractRequestToken({
+        headers: (socket.handshake.headers || {}) as Record<string, string | string[] | undefined>,
+      });
+      const token = socket.handshake.auth?.token || cookieOrHeaderToken;
+
+      if (!token || typeof token !== 'string') {
+        return next(new Error('Authentication error'));
       }
-      socket.data.user = decoded;
+
+      const verifiedUser = await verifyAndResolveJwtUser(token);
+      if (!verifiedUser) {
+        return next(new Error('Authentication error'));
+      }
+
+      socket.data.user = verifiedUser;
+      socket.data.tokenHash = hashJwtToken(token);
       next();
-    });
+    } catch {
+      return next(new Error('Authentication error'));
+    }
   });
 
   io.on('connection', (socket) => {
     telemetryStats.connectedSockets = io.engine.clientsCount;
+    const userId = socket.data?.user?.id as string | undefined;
+    const tokenHash = socket.data?.tokenHash as string | undefined;
+
+    if (userId) {
+      if (!socketsByUser.has(userId)) socketsByUser.set(userId, new Set());
+      socketsByUser.get(userId)!.add(socket);
+    }
+    if (tokenHash) {
+      if (!socketsByTokenHash.has(tokenHash)) socketsByTokenHash.set(tokenHash, new Set());
+      socketsByTokenHash.get(tokenHash)!.add(socket);
+    }
 
     socket.on('subscribe:project', async (projectId) => {
       try {
@@ -99,6 +165,20 @@ export function setupWebSockets(server: HttpServer) {
 
     socket.on('disconnect', () => {
       telemetryStats.connectedSockets = io.engine?.clientsCount || 0;
+      if (userId) {
+        const uSet = socketsByUser.get(userId);
+        if (uSet) {
+          uSet.delete(socket);
+          if (uSet.size === 0) socketsByUser.delete(userId);
+        }
+      }
+      if (tokenHash) {
+        const tSet = socketsByTokenHash.get(tokenHash);
+        if (tSet) {
+          tSet.delete(socket);
+          if (tSet.size === 0) socketsByTokenHash.delete(tokenHash);
+        }
+      }
     });
   });
 

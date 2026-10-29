@@ -5,7 +5,22 @@ export const users = pgTable('users', {
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
   role: text('role').notNull().default('DEVELOPER'),
+  emailVerified: boolean('email_verified').default(false).notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const authActionTokens = pgTable('auth_action_tokens', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  purpose: text('purpose').notNull(), // PASSWORD_RESET | EMAIL_VERIFICATION
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: timestamp('expires_at').notNull(),
+  usedAt: timestamp('used_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => {
+  return {
+    userPurposeIdx: index('auth_action_tokens_user_purpose_idx').on(table.userId, table.purpose),
+  };
 });
 
 export const refreshTokens = pgTable('refresh_tokens', {

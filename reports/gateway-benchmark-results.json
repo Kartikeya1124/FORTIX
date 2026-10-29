@@ -1,68 +1,68 @@
 {
-  "timestamp": "2026-10-18T11:29:55.912Z",
+  "timestamp": "2026-10-29T12:47:38.944Z",
   "directUpstream": {
     "benchmarkName": "Direct Upstream (Baseline)",
-    "targetUrl": "http://127.0.0.1:21604",
+    "targetUrl": "http://127.0.0.1:16577",
     "concurrency": 5,
     "totalRequests": 50,
     "successfulRequests": 50,
     "failedRequests": 0,
-    "durationSeconds": 0.034,
-    "throughputRps": 1461.8,
+    "durationSeconds": 0.028,
+    "throughputRps": 1810.5,
     "latencies": {
-      "min": 0.502483,
-      "max": 10.988762,
-      "mean": 3.37,
-      "p50": 2,
+      "min": 0.632805,
+      "max": 11.424961,
+      "mean": 2.72,
+      "p50": 1,
       "p90": 6,
-      "p95": 9,
-      "p99": 11
+      "p95": 8,
+      "p99": 10
     },
     "statusCodes": {
       "200": 50
     },
     "errorRatePercent": 0,
     "resourceUsage": {
-      "startHeapMb": 15.7,
-      "endHeapMb": 13.5,
-      "heapDeltaMb": -2.2
+      "startHeapMb": 15.8,
+      "endHeapMb": 13.4,
+      "heapDeltaMb": -2.3
     },
-    "timestamp": "2026-10-18T11:29:55.802Z"
+    "timestamp": "2026-10-29T12:47:38.834Z"
   },
   "gatewayProtected": {
     "benchmarkName": "FortiX Gateway Protected Proxy",
-    "targetUrl": "http://127.0.0.1:19836",
+    "targetUrl": "http://127.0.0.1:22335",
     "concurrency": 5,
     "totalRequests": 50,
     "successfulRequests": 50,
     "failedRequests": 0,
-    "durationSeconds": 0.05,
-    "throughputRps": 995.7,
+    "durationSeconds": 0.046,
+    "throughputRps": 1090.4,
     "latencies": {
-      "min": 2.340202,
-      "max": 7.409618,
-      "mean": 4.83,
-      "p50": 5,
-      "p90": 6,
-      "p95": 7,
-      "p99": 7
+      "min": 3.082152,
+      "max": 5.59313,
+      "mean": 4.47,
+      "p50": 4,
+      "p90": 5,
+      "p95": 6,
+      "p99": 6
     },
     "statusCodes": {
       "200": 50
     },
     "errorRatePercent": 0,
     "resourceUsage": {
-      "startHeapMb": 13.6,
-      "endHeapMb": 15.6,
+      "startHeapMb": 13.5,
+      "endHeapMb": 15.5,
       "heapDeltaMb": 2
     },
-    "timestamp": "2026-10-18T11:29:55.912Z"
+    "timestamp": "2026-10-29T12:47:38.944Z"
   },
   "gatewayOverheadMs": {
     "p50Delta": 3,
     "p95Delta": -2,
     "p99Delta": -4,
-    "meanDelta": 1.46
+    "meanDelta": 1.75
   },
   "targetOverheadSlaMet": true
 }

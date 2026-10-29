@@ -19,15 +19,16 @@ export const requireEntitlement = (entitlement: FeatureEntitlement) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    if (req.user.role === 'ADMIN') {
+    // ADMIN and DEVELOPER operators have workspace entitlements strictly within their own owned projects
+    // (project ownership is independently enforced by requireProjectOwnership / route queries).
+    // Read-only VIEWER accounts are restricted from operational entitlements.
+    if (req.user.role === 'ADMIN' || req.user.role === 'DEVELOPER') {
       return next();
     }
 
-    // In the future, check subscription plans here for normal users.
-    // Right now, DEVELOPERs do not have Pro entitlements.
-    return res.status(403).json({ 
-      error: 'Entitlement required', 
-      message: `Your current plan does not include access to ${entitlement}.` 
+    return res.status(403).json({
+      error: 'Entitlement required',
+      message: `Your role (${req.user.role}) does not include access to ${entitlement}.`,
     });
   };
 };

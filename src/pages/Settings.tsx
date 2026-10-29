@@ -7,7 +7,7 @@ import {
   Settings as SettingsIcon, Shield, User, Globe, AlertTriangle, Bell, 
   Server, Activity, Save, CheckCircle2, History, RefreshCw, Sliders, Check, FolderKanban
 } from 'lucide-react';
-import { fetchWithAuth } from '../lib/api.js';
+import { fetchWithAuth, setCsrfToken } from '../lib/api.js';
 
 const TABS = [
   { id: 'projects', label: 'API Projects', icon: FolderKanban },
@@ -45,7 +45,7 @@ export default function Settings() {
   const projectId = localStorage.getItem('fortix_project_id') || '';
 
   // Data states
-  const [user, setUser] = useState<{ email: string; role: string; createdAt: string } | null>(null);
+  const [user, setUser] = useState<{ email: string; role: string; emailVerified?: boolean; createdAt: string } | null>(null);
   const [project, setProject] = useState<{ id: string; name: string; createdAt: string } | null>(null);
   const [keyStats, setKeyStats] = useState({ active: 0, revoked: 0 });
   
@@ -99,6 +99,18 @@ export default function Settings() {
   const [savingPassword, setSavingPassword] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState({ type: '', text: '' });
   const [revokingKeys, setRevokingKeys] = useState(false);
+  const [confirmRevokeAll, setConfirmRevokeAll] = useState(false);
+
+  // Email verification & account deletion states
+  const [verificationTokenInput, setVerificationTokenInput] = useState('');
+  const [devVerificationHint, setDevVerificationHint] = useState('');
+  const [verificationMsg, setVerificationMsg] = useState({ type: '', text: '' });
+  const [verifyingEmail, setVerifyingEmail] = useState(false);
+
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState('');
 
   useEffect(() => {
     fetchData();
@@ -232,6 +244,10 @@ export default function Settings() {
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (newPassword.length < 8) {
+      setPasswordMessage({ type: 'error', text: 'New password must be at least 8 characters.' });
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setPasswordMessage({ type: 'error', text: 'Passwords do not match.' });
       return;
@@ -245,7 +261,9 @@ export default function Settings() {
         body: JSON.stringify({ currentPassword, newPassword })
       });
       if (res.ok) {
-        setPasswordMessage({ type: 'success', text: 'Password successfully updated.' });
+        const d = await res.json().catch(() => ({}));
+        if (d.csrfToken) setCsrfToken(d.csrfToken);
+        setPasswordMessage({ type: 'success', text: 'Password updated and prior sessions invalidated.' });
         setCurrentPassword('');
         setNewPassword('');
         setConfirmPassword('');
@@ -253,17 +271,91 @@ export default function Settings() {
         const d = await res.json();
         setPasswordMessage({ type: 'error', text: d.error || 'Failed to change password.' });
       }
-    } catch (err) {
+    } catch {
       setPasswordMessage({ type: 'error', text: 'An unexpected error occurred.' });
     } finally {
       setSavingPassword(false);
     }
   };
 
-  const handleRevokeAllKeys = async () => {
-    if (!window.confirm('Are you sure you want to revoke ALL API keys? This will immediately sever active integrations.')) {
+  const handleRequestVerification = async () => {
+    setVerificationMsg({ type: '', text: '' });
+    setVerifyingEmail(true);
+    try {
+      const res = await fetchWithAuth('/api/auth/resend-verification', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        if (data.devVerificationToken) {
+          setDevVerificationHint(data.devVerificationToken);
+        }
+        setVerificationMsg({ type: 'success', text: data.message || 'Verification token sent.' });
+      } else {
+        setVerificationMsg({ type: 'error', text: data.error || 'Could not issue verification token.' });
+      }
+    } catch {
+      setVerificationMsg({ type: 'error', text: 'Network error while requesting verification.' });
+    } finally {
+      setVerifyingEmail(false);
+    }
+  };
+
+  const handleConfirmVerification = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!verificationTokenInput.trim()) return;
+    setVerifyingEmail(true);
+    setVerificationMsg({ type: '', text: '' });
+    try {
+      const res = await fetchWithAuth('/api/auth/verify-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: verificationTokenInput.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setUser((prev) => (prev ? { ...prev, emailVerified: true } : prev));
+        setVerificationTokenInput('');
+        setDevVerificationHint('');
+        setVerificationMsg({ type: 'success', text: 'Email address verified.' });
+      } else {
+        setVerificationMsg({ type: 'error', text: data.error || 'Invalid or expired verification token.' });
+      }
+    } catch {
+      setVerificationMsg({ type: 'error', text: 'Network error while verifying email.' });
+    } finally {
+      setVerifyingEmail(false);
+    }
+  };
+
+  const handleDeleteAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDeleteAccountError('');
+    if (deleteConfirmText !== 'DELETE') {
+      setDeleteAccountError('Type DELETE in uppercase to confirm permanent account removal.');
       return;
     }
+    setDeletingAccount(true);
+    try {
+      const res = await fetchWithAuth('/api/control/account', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: deletePassword, confirmation: 'DELETE' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setCsrfToken(null);
+        localStorage.removeItem('fortix_project_id');
+        window.dispatchEvent(new CustomEvent('fortix:auth-unauthorized'));
+      } else {
+        setDeleteAccountError(data.error || 'Failed to delete account. Verify your password.');
+      }
+    } catch {
+      setDeleteAccountError('Network error while deleting account.');
+    } finally {
+      setDeletingAccount(false);
+    }
+  };
+
+  const handleRevokeAllKeys = async () => {
     setRevokingKeys(true);
     try {
       const activeProjId = projectId || project?.id;
@@ -271,6 +363,7 @@ export default function Settings() {
         method: 'POST'
       });
       if (res.ok) {
+        setConfirmRevokeAll(false);
         const keysRes = await fetchWithAuth(`/api/control/keys?projectId=${activeProjId}`);
         if (keysRes.ok) {
           const keys = await keysRes.json();
@@ -395,13 +488,32 @@ export default function Settings() {
                 <p className="text-xs text-muted max-w-xl">
                   Revoke all active API keys instantly. All running workloads and client integrations relying on existing keys will be immediately rejected with HTTP 401.
                 </p>
-                <button
-                  onClick={handleRevokeAllKeys}
-                  disabled={revokingKeys || keyStats.active === 0}
-                  className="px-4 py-2 bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500 hover:text-white rounded-lg text-xs font-bold uppercase tracking-wider transition disabled:opacity-50"
-                >
-                  {revokingKeys ? 'Revoking Keys...' : `Revoke All Keys (${keyStats.active} Active)`}
-                </button>
+                {!confirmRevokeAll ? (
+                  <button
+                    onClick={() => setConfirmRevokeAll(true)}
+                    disabled={revokingKeys || keyStats.active === 0}
+                    className="px-4 py-2 bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500 hover:text-white rounded-lg text-xs font-bold uppercase tracking-wider transition disabled:opacity-50"
+                  >
+                    {`Revoke All Keys (${keyStats.active} Active)`}
+                  </button>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    <button
+                      onClick={handleRevokeAllKeys}
+                      disabled={revokingKeys}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition disabled:opacity-50"
+                    >
+                      {revokingKeys ? 'Revoking Keys...' : 'Confirm Immediate Revocation'}
+                    </button>
+                    <button
+                      onClick={() => setConfirmRevokeAll(false)}
+                      disabled={revokingKeys}
+                      className="px-3.5 py-2 bg-surface border border-subtle text-muted hover:text-strong rounded-lg text-xs font-semibold transition"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </section>
             </div>
           )}
@@ -411,20 +523,82 @@ export default function Settings() {
             <div className="space-y-6">
               <section className="bg-surface border border-subtle rounded-xl p-6 space-y-4">
                 <h3 className="text-sm font-bold uppercase tracking-wider text-strong">Account Details</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
                   <div className="p-3 bg-base border border-subtle rounded-lg">
                     <span className="text-muted block uppercase tracking-wider mb-1">Email</span>
-                    <strong className="text-strong text-sm">{user?.email}</strong>
+                    <strong className="text-strong text-sm break-all">{user?.email}</strong>
                   </div>
                   <div className="p-3 bg-base border border-subtle rounded-lg">
-                    <span className="text-muted block uppercase tracking-wider mb-1">Role / Entitlement</span>
-                    <strong className="text-primary text-sm font-bold">{user?.role}</strong>
+                    <span className="text-muted block uppercase tracking-wider mb-1">Role</span>
+                    <strong className="text-primary text-sm font-bold font-mono">{user?.role}</strong>
+                  </div>
+                  <div className="p-3 bg-base border border-subtle rounded-lg">
+                    <span className="text-muted block uppercase tracking-wider mb-1">Email Status</span>
+                    <strong className={`text-sm font-bold ${user?.emailVerified ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {user?.emailVerified ? 'Verified' : 'Unverified'}
+                    </strong>
                   </div>
                   <div className="p-3 bg-base border border-subtle rounded-lg">
                     <span className="text-muted block uppercase tracking-wider mb-1">Created At</span>
-                    <strong className="text-strong text-sm">{user ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}</strong>
+                    <strong className="text-strong text-sm font-mono">{user ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}</strong>
                   </div>
                 </div>
+
+                {!user?.emailVerified && (
+                  <div className="pt-4 border-t border-subtle space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-bold text-strong uppercase tracking-wider">Verify Operator Email</div>
+                        <p className="text-xs text-muted">Confirm ownership of your email address using a single-use verification token.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRequestVerification}
+                        disabled={verifyingEmail}
+                        className="px-3.5 py-2 bg-base hover:bg-hover border border-subtle rounded-lg text-xs font-semibold text-strong transition disabled:opacity-50"
+                      >
+                        {verifyingEmail ? 'Sending...' : 'Send Verification Token'}
+                      </button>
+                    </div>
+
+                    {verificationMsg.text && (
+                      <div className={`p-3 rounded-lg text-xs ${verificationMsg.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border border-rose-500/30 text-rose-400'}`}>
+                        {verificationMsg.text}
+                      </div>
+                    )}
+
+                    {devVerificationHint && (
+                      <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs space-y-1.5">
+                        <div className="font-semibold text-amber-400">Local Dev Outbox Token</div>
+                        <div className="font-mono text-[11px] text-strong break-all">{devVerificationHint}</div>
+                        <button
+                          type="button"
+                          onClick={() => setVerificationTokenInput(devVerificationHint)}
+                          className="text-[11px] font-semibold text-primary hover:underline"
+                        >
+                          Use token
+                        </button>
+                      </div>
+                    )}
+
+                    <form onSubmit={handleConfirmVerification} className="flex flex-wrap gap-2 max-w-lg">
+                      <input
+                        type="text"
+                        value={verificationTokenInput}
+                        onChange={(e) => setVerificationTokenInput(e.target.value)}
+                        placeholder="Paste 64-character verification token"
+                        className="flex-1 min-w-[220px] bg-base border border-subtle rounded-lg px-3 py-2 text-xs font-mono text-strong"
+                      />
+                      <button
+                        type="submit"
+                        disabled={verifyingEmail || !verificationTokenInput.trim()}
+                        className="px-4 py-2 bg-primary text-inverted rounded-lg text-xs font-bold uppercase tracking-wider disabled:opacity-50"
+                      >
+                        Verify Email
+                      </button>
+                    </form>
+                  </div>
+                )}
               </section>
 
               <section className="bg-surface border border-subtle rounded-xl p-6 space-y-4">
@@ -446,11 +620,11 @@ export default function Settings() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-muted uppercase tracking-widest mb-1">New Password</label>
+                    <label className="block text-xs font-bold text-muted uppercase tracking-widest mb-1">New Password (min 8 chars)</label>
                     <input
                       type="password"
                       required
-                      minLength={6}
+                      minLength={8}
                       value={newPassword}
                       onChange={e => setNewPassword(e.target.value)}
                       className="w-full bg-base border border-subtle rounded-lg px-3 py-2 text-sm text-strong"
@@ -461,7 +635,7 @@ export default function Settings() {
                     <input
                       type="password"
                       required
-                      minLength={6}
+                      minLength={8}
                       value={confirmPassword}
                       onChange={e => setConfirmPassword(e.target.value)}
                       className="w-full bg-base border border-subtle rounded-lg px-3 py-2 text-sm text-strong"
@@ -473,6 +647,56 @@ export default function Settings() {
                     className="px-4 py-2 bg-primary text-inverted rounded-lg text-xs font-bold uppercase tracking-wider transition"
                   >
                     {savingPassword ? 'Updating...' : 'Update Password'}
+                  </button>
+                </form>
+              </section>
+
+              <section className="bg-rose-500/5 border border-rose-500/25 rounded-xl p-6 space-y-4">
+                <div className="flex items-center gap-2 text-rose-500">
+                  <AlertTriangle size={18} />
+                  <h3 className="text-sm font-bold uppercase tracking-wider">Delete Operator Account</h3>
+                </div>
+                <p className="text-xs text-muted max-w-xl leading-relaxed">
+                  Permanently delete your FortiX operator account. This immediately revokes your active session, closes live WebSocket telemetry connections, invalidates all gateway API keys across owned projects, and cascades deletion of owned organizations, routes, policies, and experiments.
+                </p>
+                <form onSubmit={handleDeleteAccount} className="space-y-3 max-w-md">
+                  {deleteAccountError && (
+                    <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-400">
+                      {deleteAccountError}
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-xs font-bold text-muted uppercase tracking-widest mb-1">
+                      Confirm Current Password
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={deletePassword}
+                      onChange={(e) => setDeletePassword(e.target.value)}
+                      placeholder="Enter your password"
+                      className="w-full bg-base border border-subtle rounded-lg px-3 py-2 text-sm text-strong"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-muted uppercase tracking-widest mb-1">
+                      Type <span className="font-mono text-rose-400">DELETE</span> to confirm
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={deleteConfirmText}
+                      onChange={(e) => setDeleteConfirmText(e.target.value)}
+                      placeholder="DELETE"
+                      className="w-full bg-base border border-subtle rounded-lg px-3 py-2 text-sm font-mono text-strong"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={deletingAccount || deleteConfirmText !== 'DELETE' || !deletePassword}
+                    className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition disabled:opacity-50"
+                  >
+                    {deletingAccount ? 'Deleting Account...' : 'Permanently Delete Account'}
                   </button>
                 </form>
               </section>

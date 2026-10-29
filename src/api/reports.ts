@@ -1,12 +1,19 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import { db } from '../db/index.js';
-import { projects, organizations, verifications } from '../db/schema.js';
+import { projects, organizations, verifications, experiments, apiRoutes } from '../db/schema.js';
 import { eq, and } from 'drizzle-orm';
 import PDFDocument from 'pdfkit';
 import { artifactStorage } from '../storage/index.js';
 
 const router = Router();
+
+function sanitizeAttachmentFilename(raw: string): string {
+  const cleaned = String(raw || '')
+    .replace(/[\r\n"\\;/]/g, '_')
+    .replace(/[^a-zA-Z0-9._-]/g, '_');
+  return cleaned || 'FortiX-Report.pdf';
+}
 
 // Helper to generate a PDF buffer using PDFDocument
 export function buildPdfBuffer(title: string, metadata: Record<string, string>, content: string): Promise<Buffer> {
@@ -38,7 +45,7 @@ export function buildPdfBuffer(title: string, metadata: Record<string, string>, 
 router.post('/control/reports/:verificationId', authenticate, async (req, res) => {
   try {
     const verificationId = String(req.params.verificationId);
-    const { projectId, details } = req.body;
+    const { projectId, details } = req.body || {};
 
     if (!projectId || typeof projectId !== 'string') {
       return res.status(400).json({ error: 'Missing or invalid projectId in request body' });
@@ -55,20 +62,46 @@ router.post('/control/reports/:verificationId', authenticate, async (req, res) =
       return res.status(403).json({ error: 'Unauthorized: Access to project denied' });
     }
 
+    // Verify that if verificationId references a real verification row in DB, it belongs to this project
+    let existingVerificationOwned = false;
+    try {
+      const [existingVerif] = await db
+        .select({
+          id: verifications.id,
+          routeProjectId: apiRoutes.projectId,
+        })
+        .from(verifications)
+        .innerJoin(experiments, eq(verifications.experimentId, experiments.id))
+        .innerJoin(apiRoutes, eq(experiments.routeId, apiRoutes.id))
+        .where(eq(verifications.id, verificationId))
+        .limit(1);
+
+      if (existingVerif) {
+        if (existingVerif.routeProjectId !== projectId) {
+          return res.status(403).json({ error: 'Forbidden: Verification record belongs to another project' });
+        }
+        existingVerificationOwned = true;
+      }
+    } catch {
+      // Ad-hoc verification ID not present in verifications table
+    }
+
+    const safeVerificationToken = verificationId.replace(/[^a-zA-Z0-9._-]/g, '_') || 'report';
+    const filename = sanitizeAttachmentFilename(`FortiX-Report-${safeVerificationToken}.pdf`);
+
     // 1. Generate PDF in memory buffer
     const pdfBuffer = await buildPdfBuffer(
       'FortiX Resilience & Verification Evidence',
       {
-        'Verification ID': verificationId,
+        'Verification ID': verificationId.slice(0, 128),
         'Project Name': project.name,
         'Generated At': new Date().toISOString(),
         'Engine': 'FortiX Resilience Verification Engine v2.0',
       },
-      details || 'Evidence executed, chaos injected, resilience verified.'
+      typeof details === 'string' ? details.slice(0, 50000) : 'Evidence executed, chaos injected, resilience verified.'
     );
 
     // 2. Persist to Artifact Storage (Local / S3)
-    const filename = `FortiX-Report-${verificationId}.pdf`;
     const artifactMeta = await artifactStorage.put(pdfBuffer, {
       verificationId,
       projectId,
@@ -79,17 +112,19 @@ router.post('/control/reports/:verificationId', authenticate, async (req, res) =
       },
     });
 
-    // 3. Update Verification record in Database if verificationId exists
-    try {
-      await db
-        .update(verifications)
-        .set({ pdfS3Url: artifactMeta.objectKey })
-        .where(eq(verifications.id, verificationId));
-    } catch (dbErr) {
-      // Verification ID might be custom/ad-hoc
+    // 3. Update Verification record in Database ONLY when verified as owned by this project
+    if (existingVerificationOwned) {
+      try {
+        await db
+          .update(verifications)
+          .set({ pdfS3Url: artifactMeta.objectKey })
+          .where(eq(verifications.id, verificationId));
+      } catch {
+        // Non-fatal metadata update
+      }
     }
 
-    // 4. Return PDF stream with artifact metadata headers
+    // 4. Return PDF stream with sanitized Content-Disposition and artifact metadata headers
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
     res.setHeader('X-FortiX-Artifact-Id', artifactMeta.artifactId);
@@ -98,7 +133,7 @@ router.post('/control/reports/:verificationId', authenticate, async (req, res) =
 
     res.send(pdfBuffer);
   } catch (error: any) {
-    res.status(500).json({ error: 'Failed to generate and persist report', message: error?.message });
+    res.status(500).json({ error: 'Failed to generate and persist report' });
   }
 });
 
@@ -128,18 +163,19 @@ router.get('/control/reports/artifacts/:artifactId', authenticate, async (req, r
       return res.status(404).json({ error: 'Artifact not found' });
     }
 
+    const safeFilename = sanitizeAttachmentFilename(artifact.metadata.filename);
     res.setHeader('Content-Type', artifact.metadata.contentType);
-    res.setHeader('Content-Disposition', `attachment; filename=${artifact.metadata.filename}`);
+    res.setHeader('Content-Disposition', `attachment; filename=${safeFilename}`);
     res.setHeader('X-FortiX-Artifact-Id', artifact.metadata.artifactId);
     res.setHeader('X-FortiX-Artifact-SHA256', artifact.metadata.sha256);
     res.setHeader('X-FortiX-Storage-Provider', artifact.metadata.storageProvider);
 
     res.send(artifact.data);
   } catch (error: any) {
-    if (error.message?.includes('Access Denied')) {
+    if (error.message?.includes('Access Denied') || error.message?.includes('Path traversal')) {
       return res.status(403).json({ error: error.message });
     }
-    res.status(500).json({ error: 'Failed to retrieve artifact', message: error?.message });
+    res.status(500).json({ error: 'Failed to retrieve artifact' });
   }
 });
 
@@ -161,7 +197,7 @@ router.get('/control/reports/projects/:projectId/artifacts', authenticate, async
     const list = await artifactStorage.listByProject(projectId);
     res.json(list);
   } catch (error: any) {
-    res.status(500).json({ error: 'Failed to list artifacts', message: error?.message });
+    res.status(500).json({ error: 'Failed to list artifacts' });
   }
 });
 

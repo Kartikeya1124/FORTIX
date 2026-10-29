@@ -126,19 +126,12 @@ export function AlertingSettings({ user }: { user?: any }) {
           )}
         </div>
         <div className="p-6 space-y-4">
-          {user?.role !== 'ADMIN' ? (
+          {user?.role === 'VIEWER' ? (
             <div className="text-center py-8">
-              <div className="w-12 h-12 bg-gray-500/10 text-gray-500 rounded-full flex items-center justify-center mx-auto mb-3">
-                <Trash2 size={24} className="opacity-0" />
-                <span className="text-xl">🔒</span>
-              </div>
-              <h4 className="text-lg font-bold text-strong mb-2">Pro Feature: Alert Webhooks</h4>
-              <p className="text-sm text-muted max-w-md mx-auto mb-4">
-                Upgrade to the ADMIN / PRO ENTITLEMENT plan to configure and monitor outbound webhook notifications.
+              <h4 className="text-lg font-bold text-strong mb-2">Operator Permission Required</h4>
+              <p className="text-sm text-muted max-w-md mx-auto">
+                Read-only VIEWER accounts cannot configure or modify outbound webhook notifications. Request DEVELOPER role access from your workspace administrator.
               </p>
-              <button disabled className="px-4 py-2 bg-border text-muted rounded text-xs font-bold tracking-widest uppercase">
-                Upgrade to Pro
-              </button>
             </div>
           ) : (
           <>

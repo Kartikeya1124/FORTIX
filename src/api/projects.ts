@@ -168,25 +168,31 @@ router.post('/', async (req: AuthRequest, res) => {
 
 // PATCH /api/control/projects/:projectId - Update project metadata
 router.patch('/:projectId', requireProjectOwnership, async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
   const { projectId } = req.params;
   try {
-    const { name, environment } = z.object({ 
+    const org = await getDefaultOrg(userId);
+    const { name, environment } = z.object({
       name: z.string().trim().min(2).max(64).optional(),
       environment: z.enum(['development', 'staging', 'production']).optional()
     }).parse(req.body);
-    
+
     const updates: any = {};
     if (name) updates.name = name;
     if (environment) updates.environment = environment;
-    
+
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'No fields provided for update' });
     }
 
     const [updated] = await db.update(projects)
       .set(updates)
-      .where(eq(projects.id, projectId as string))
+      .where(and(eq(projects.id, projectId as string), eq(projects.orgId, org.id)))
       .returning();
+
+    if (!updated) {
+      return res.status(403).json({ error: 'Forbidden: You do not own this project' });
+    }
 
     res.json(updated);
   } catch (error) {
@@ -205,18 +211,35 @@ router.delete('/:projectId', requireProjectOwnership, async (req: AuthRequest, r
     const org = await getDefaultOrg(userId);
     const allUserProjects = await db.select().from(projects).where(eq(projects.orgId, org.id));
 
+    if (!allUserProjects.some((p) => p.id === projectId)) {
+      return res.status(403).json({ error: 'Forbidden: You do not own this project' });
+    }
+
     // Safety guardrail: Do not allow deleting the last project
     if (allUserProjects.length <= 1) {
-      return res.status(400).json({ 
-        error: 'Cannot delete the only remaining project. Your account must maintain at least one active API project.' 
+      return res.status(400).json({
+        error: 'Cannot delete the only remaining project. Your account must maintain at least one active API project.'
       });
     }
 
-    // Cascade cleanups for foreign-key safety
+    const { verifications, workflowRuns, webhooks, webhookDeliveries } = await import('../db/schema.js');
+    const { invalidateApiKeyCache } = await import('../gateway/index.js');
+    const { publishKeyRevocation } = await import('../lib/key-invalidation.js');
+
+    // Cascade cleanups for foreign-key safety across PostgreSQL & pg-mem
     const routes = await db.select({ id: apiRoutes.id }).from(apiRoutes).where(eq(apiRoutes.projectId, projectId));
     const routeIds = routes.map(r => r.id);
 
+    await db.delete(workflowRuns).where(eq(workflowRuns.projectId, projectId));
+    await db.delete(webhookDeliveries).where(eq(webhookDeliveries.projectId, projectId));
+    await db.delete(webhooks).where(eq(webhooks.projectId, projectId));
+
     if (routeIds.length > 0) {
+      const exps = await db.select({ id: experiments.id }).from(experiments).where(inArray(experiments.routeId, routeIds));
+      const expIds = exps.map(e => e.id);
+      if (expIds.length > 0) {
+        await db.delete(verifications).where(inArray(verifications.experimentId, expIds));
+      }
       await db.delete(securityPolicies).where(inArray(securityPolicies.routeId, routeIds));
       await db.delete(experiments).where(inArray(experiments.routeId, routeIds));
       await db.delete(metricLogs).where(inArray(metricLogs.routeId, routeIds));
@@ -227,9 +250,18 @@ router.delete('/:projectId', requireProjectOwnership, async (req: AuthRequest, r
     await db.delete(apiKeys).where(eq(apiKeys.projectId, projectId));
     await db.delete(projectSettings).where(eq(projectSettings.projectId, projectId));
     await db.delete(auditLogs).where(eq(auditLogs.projectId, projectId));
+    invalidateSettingsCache(projectId);
+
+    // Evict any cached API keys for this deleted project locally and across distributed nodes
+    invalidateApiKeyCache(undefined, projectId);
+    await publishKeyRevocation({
+      event: 'api_key.revoked_all',
+      projectId,
+      timestamp: new Date().toISOString(),
+    });
 
     // Finally delete the project itself
-    await db.delete(projects).where(eq(projects.id, projectId));
+    await db.delete(projects).where(and(eq(projects.id, projectId), eq(projects.orgId, org.id)));
 
     // Pick the fallback active project
     const remaining = allUserProjects.filter(p => p.id !== projectId);

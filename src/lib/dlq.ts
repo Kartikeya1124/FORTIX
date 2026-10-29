@@ -1,7 +1,6 @@
-import { Queue, Job } from 'bullmq';
-import { redisConnection } from '../redis.js';
+import { Queue } from 'bullmq';
 import { db } from '../db/index.js';
-import { experiments } from '../db/schema.js';
+import { experiments, apiRoutes } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
 import { dlqJobsTotal, dlqRetriesTotal, dlqCurrentGauge } from './metrics.js';
 import { logger } from './logger.js';
@@ -11,6 +10,7 @@ export interface DlqJobRecord {
   queueName: string;
   jobName: string;
   experimentId?: string;
+  projectId?: string;
   data: any;
   failedReason: string;
   stacktrace: string[];
@@ -30,6 +30,38 @@ export interface QueueHealthStats {
   paused: boolean;
 }
 
+const SENSITIVE_DLQ_KEYS = new Set([
+  'secret',
+  'secrethash',
+  'rawkey',
+  'password',
+  'currentpassword',
+  'newpassword',
+  'token',
+  'authorization',
+  'x-api-key',
+  'x-fortix-token',
+]);
+
+export function sanitizeDlqPayload(value: any, depth = 0): any {
+  if (depth > 6 || value === null || value === undefined) return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeDlqPayload(item, depth + 1));
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (SENSITIVE_DLQ_KEYS.has(k.toLowerCase())) {
+        out[k] = v ? '[REDACTED]' : v;
+      } else {
+        out[k] = sanitizeDlqPayload(v, depth + 1);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
 // In-memory persistent registry for DLQ records to ensure reliability across runtime modes (Real Redis / Mock)
 export const inMemoryDlqStore = new Map<string, DlqJobRecord>();
 
@@ -42,6 +74,58 @@ export function registerQueue(name: string, queue: Queue) {
 
 export function getRegisteredQueue(name: string): Queue | undefined {
   return registeredQueues.get(name);
+}
+
+export async function resolveDlqJobProjectId(job: DlqJobRecord): Promise<string | undefined> {
+  if (job.projectId && typeof job.projectId === 'string') {
+    return job.projectId;
+  }
+  if (job.data && typeof job.data === 'object' && typeof job.data.projectId === 'string' && job.data.projectId) {
+    job.projectId = job.data.projectId;
+    return job.projectId;
+  }
+  if (job.experimentId) {
+    try {
+      const [expRow] = await db
+        .select({ routeId: experiments.routeId })
+        .from(experiments)
+        .where(eq(experiments.id, job.experimentId))
+        .limit(1);
+      if (expRow?.routeId) {
+        const [routeRow] = await db
+          .select({ projectId: apiRoutes.projectId })
+          .from(apiRoutes)
+          .where(eq(apiRoutes.id, expRow.routeId))
+          .limit(1);
+        if (routeRow?.projectId) {
+          job.projectId = routeRow.projectId;
+          return job.projectId;
+        }
+      }
+    } catch {
+      // Ignore lookup failures for synthetic/deleted experiment IDs
+    }
+  }
+  return undefined;
+}
+
+export async function isDlqJobVisibleToTenant(
+  job: DlqJobRecord,
+  allowedProjectIds?: Set<string>,
+  explicitProjectId?: string
+): Promise<boolean> {
+  const jobProjectId = await resolveDlqJobProjectId(job);
+  if (explicitProjectId) {
+    return jobProjectId === explicitProjectId;
+  }
+  if (!allowedProjectIds) {
+    return true;
+  }
+  if (!jobProjectId) {
+    // Unscoped system/diagnostic DLQ jobs have no tenant project binding
+    return true;
+  }
+  return allowedProjectIds.has(jobProjectId);
 }
 
 /**
@@ -58,85 +142,112 @@ export async function recordDlqFailure(params: {
   maxAttempts?: number;
 }) {
   const experimentId = params.data?.experimentId || (typeof params.data === 'string' ? params.data : undefined);
+  const directProjectId = typeof params.data?.projectId === 'string' ? params.data.projectId : undefined;
   const attemptsMade = params.attemptsMade ?? 3;
   const maxAttempts = params.maxAttempts ?? 3;
+  const sanitizedData = sanitizeDlqPayload(params.data);
 
   const record: DlqJobRecord = {
     id: params.jobId,
     queueName: params.queueName,
     jobName: params.jobName,
     experimentId,
-    data: params.data,
+    projectId: directProjectId,
+    data: sanitizedData,
     failedReason: params.failedReason || 'Unknown execution failure',
     stacktrace: params.stacktrace || [],
     attemptsMade,
     maxAttempts,
     failedAt: new Date().toISOString(),
-    status: 'DEAD_LETTER'
+    status: 'DEAD_LETTER',
   };
+
+  if (!record.projectId && experimentId) {
+    await resolveDlqJobProjectId(record);
+  }
 
   inMemoryDlqStore.set(params.jobId, record);
 
   // Update Prometheus metrics
   try {
     dlqJobsTotal.inc({ queue: params.queueName, job_name: params.jobName });
-    const countForQueue = Array.from(inMemoryDlqStore.values()).filter(j => j.queueName === params.queueName && j.status === 'DEAD_LETTER').length;
+    const countForQueue = Array.from(inMemoryDlqStore.values()).filter(
+      (j) => j.queueName === params.queueName && j.status === 'DEAD_LETTER'
+    ).length;
     dlqCurrentGauge.set({ queue: params.queueName }, countForQueue);
-  } catch (err) {
+  } catch {
     // Metric increment resilience
   }
 
   // Update Experiment record in database if experimentId is present
   if (experimentId) {
     try {
-      await db.update(experiments).set({
-        status: 'FAILED',
-        completedAt: new Date(),
-      }).where(eq(experiments.id, experimentId));
+      await db
+        .update(experiments)
+        .set({
+          status: 'FAILED',
+          completedAt: new Date(),
+        })
+        .where(eq(experiments.id, experimentId));
     } catch (e) {
       logger.warn({ experimentId, err: e }, '[DLQ] Failed to update experiment status in DB');
     }
   }
 
-  logger.error({
-    jobId: params.jobId,
-    queue: params.queueName,
-    jobName: params.jobName,
-    experimentId,
-    attemptsMade,
-    reason: params.failedReason
-  }, '[DLQ] Job permanently failed and routed to Dead-Letter Queue');
+  logger.error(
+    {
+      jobId: params.jobId,
+      queue: params.queueName,
+      jobName: params.jobName,
+      experimentId,
+      attemptsMade,
+      reason: params.failedReason,
+    },
+    '[DLQ] Job permanently failed and routed to Dead-Letter Queue'
+  );
 
   return record;
 }
 
 /**
- * Retrieve all DLQ jobs with filtering and pagination
+ * Retrieve all DLQ jobs with tenant isolation, filtering, and pagination
  */
-export async function listDlqJobs(options: {
-  queueName?: string;
-  status?: string;
-  search?: string;
-  limit?: number;
-  offset?: number;
-} = {}): Promise<{ total: number; jobs: DlqJobRecord[] }> {
-  let list = Array.from(inMemoryDlqStore.values());
+export async function listDlqJobs(
+  options: {
+    queueName?: string;
+    status?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+    projectId?: string;
+    allowedProjectIds?: Set<string>;
+  } = {}
+): Promise<{ total: number; jobs: DlqJobRecord[] }> {
+  const allRecords = Array.from(inMemoryDlqStore.values());
+  let list: DlqJobRecord[] = [];
+
+  for (const job of allRecords) {
+    if (await isDlqJobVisibleToTenant(job, options.allowedProjectIds, options.projectId)) {
+      list.push({ ...job, data: sanitizeDlqPayload(job.data) });
+    }
+  }
 
   if (options.queueName) {
-    list = list.filter(j => j.queueName.toLowerCase() === options.queueName!.toLowerCase());
+    list = list.filter((j) => j.queueName.toLowerCase() === options.queueName!.toLowerCase());
   }
 
   if (options.status) {
-    list = list.filter(j => j.status.toLowerCase() === options.status!.toLowerCase());
+    list = list.filter((j) => j.status.toLowerCase() === options.status!.toLowerCase());
   }
 
   if (options.search) {
     const q = options.search.toLowerCase();
-    list = list.filter(j => 
-      j.id.toLowerCase().includes(q) ||
-      j.jobName.toLowerCase().includes(q) ||
-      (j.experimentId && j.experimentId.toLowerCase().includes(q)) ||
-      j.failedReason.toLowerCase().includes(q)
+    list = list.filter(
+      (j) =>
+        j.id.toLowerCase().includes(q) ||
+        j.jobName.toLowerCase().includes(q) ||
+        (j.experimentId && j.experimentId.toLowerCase().includes(q)) ||
+        j.failedReason.toLowerCase().includes(q)
     );
   }
 
@@ -156,7 +267,8 @@ export async function listDlqJobs(options: {
  */
 export async function getDlqJob(jobId: string): Promise<DlqJobRecord | null> {
   const job = inMemoryDlqStore.get(jobId);
-  return job || null;
+  if (!job) return null;
+  return { ...job, data: sanitizeDlqPayload(job.data) };
 }
 
 /**
@@ -173,10 +285,13 @@ export async function retryDlqJob(jobId: string): Promise<{ success: boolean; me
   // If experiment ID exists, reset experiment status in DB
   if (dlqJob.experimentId) {
     try {
-      await db.update(experiments).set({
-        status: 'QUEUED',
-        completedAt: null
-      }).where(eq(experiments.id, dlqJob.experimentId));
+      await db
+        .update(experiments)
+        .set({
+          status: 'QUEUED',
+          completedAt: null,
+        })
+        .where(eq(experiments.id, dlqJob.experimentId));
     } catch (err) {
       logger.warn({ experimentId: dlqJob.experimentId, err }, '[DLQ] Failed to reset experiment status for retry');
     }
@@ -187,7 +302,7 @@ export async function retryDlqJob(jobId: string): Promise<{ success: boolean; me
     try {
       await targetQueue.add(dlqJob.jobName, dlqJob.data, {
         attempts: dlqJob.maxAttempts || 3,
-        backoff: { type: 'exponential', delay: 1000 }
+        backoff: { type: 'exponential', delay: 1000 },
       });
     } catch (queueErr) {
       logger.warn({ jobId, err: queueErr }, '[DLQ] Error re-enqueuing job to BullMQ');
@@ -200,30 +315,38 @@ export async function retryDlqJob(jobId: string): Promise<{ success: boolean; me
   // Metrics
   try {
     dlqRetriesTotal.inc({ queue: dlqJob.queueName, job_name: dlqJob.jobName });
-    const countForQueue = Array.from(inMemoryDlqStore.values()).filter(j => j.queueName === dlqJob.queueName && j.status === 'DEAD_LETTER').length;
+    const countForQueue = Array.from(inMemoryDlqStore.values()).filter(
+      (j) => j.queueName === dlqJob.queueName && j.status === 'DEAD_LETTER'
+    ).length;
     dlqCurrentGauge.set({ queue: dlqJob.queueName }, countForQueue);
-  } catch (e) {}
+  } catch {}
 
   logger.info({ jobId, queue: dlqJob.queueName, experimentId: dlqJob.experimentId }, '[DLQ] Job re-enqueued for retry');
 
   return {
     success: true,
     message: `Job ${jobId} successfully re-enqueued for retry`,
-    job: dlqJob
+    job: { ...dlqJob, data: sanitizeDlqPayload(dlqJob.data) },
   };
 }
 
 /**
- * Retry all DLQ jobs across queues or for a specific queue
+ * Retry all DLQ jobs across queues or for a specific queue (scoped to caller's projects when provided)
  */
-export async function retryAllDlqJobs(queueName?: string): Promise<{ retriedCount: number; message: string }> {
-  const candidateJobs = Array.from(inMemoryDlqStore.values()).filter(j => 
-    (!queueName || j.queueName.toLowerCase() === queueName.toLowerCase()) && 
-    j.status === 'DEAD_LETTER'
+export async function retryAllDlqJobs(
+  queueName?: string,
+  allowedProjectIds?: Set<string>,
+  explicitProjectId?: string
+): Promise<{ retriedCount: number; message: string }> {
+  const allJobs = Array.from(inMemoryDlqStore.values()).filter(
+    (j) => (!queueName || j.queueName.toLowerCase() === queueName.toLowerCase()) && j.status === 'DEAD_LETTER'
   );
 
   let retriedCount = 0;
-  for (const job of candidateJobs) {
+  for (const job of allJobs) {
+    if (!(await isDlqJobVisibleToTenant(job, allowedProjectIds, explicitProjectId))) {
+      continue;
+    }
     const result = await retryDlqJob(job.id);
     if (result.success) {
       retriedCount++;
@@ -232,7 +355,7 @@ export async function retryAllDlqJobs(queueName?: string): Promise<{ retriedCoun
 
   return {
     retriedCount,
-    message: `Successfully triggered retry for ${retriedCount} DLQ job(s)`
+    message: `Successfully triggered retry for ${retriedCount} DLQ job(s)`,
   };
 }
 
@@ -248,9 +371,11 @@ export async function discardDlqJob(jobId: string): Promise<{ success: boolean; 
   inMemoryDlqStore.delete(jobId);
 
   try {
-    const countForQueue = Array.from(inMemoryDlqStore.values()).filter(j => j.queueName === dlqJob.queueName && j.status === 'DEAD_LETTER').length;
+    const countForQueue = Array.from(inMemoryDlqStore.values()).filter(
+      (j) => j.queueName === dlqJob.queueName && j.status === 'DEAD_LETTER'
+    ).length;
     dlqCurrentGauge.set({ queue: dlqJob.queueName }, countForQueue);
-  } catch (e) {}
+  } catch {}
 
   logger.info({ jobId, queue: dlqJob.queueName }, '[DLQ] Job discarded from Dead-Letter Queue');
 
@@ -258,24 +383,34 @@ export async function discardDlqJob(jobId: string): Promise<{ success: boolean; 
 }
 
 /**
- * Purge all DLQ jobs
+ * Purge all DLQ jobs (scoped to caller's projects when provided)
  */
-export async function purgeAllDlqJobs(queueName?: string): Promise<{ purgedCount: number; message: string }> {
+export async function purgeAllDlqJobs(
+  queueName?: string,
+  allowedProjectIds?: Set<string>,
+  explicitProjectId?: string
+): Promise<{ purgedCount: number; message: string }> {
   let purgedCount = 0;
 
   for (const [id, job] of inMemoryDlqStore.entries()) {
-    if (!queueName || job.queueName.toLowerCase() === queueName.toLowerCase()) {
-      inMemoryDlqStore.delete(id);
-      purgedCount++;
+    if (queueName && job.queueName.toLowerCase() !== queueName.toLowerCase()) {
+      continue;
     }
+    if (!(await isDlqJobVisibleToTenant(job, allowedProjectIds, explicitProjectId))) {
+      continue;
+    }
+    inMemoryDlqStore.delete(id);
+    purgedCount++;
   }
 
   try {
     for (const q of registeredQueues.keys()) {
-      const countForQueue = Array.from(inMemoryDlqStore.values()).filter(j => j.queueName === q && j.status === 'DEAD_LETTER').length;
+      const countForQueue = Array.from(inMemoryDlqStore.values()).filter(
+        (j) => j.queueName === q && j.status === 'DEAD_LETTER'
+      ).length;
       dlqCurrentGauge.set({ queue: q }, countForQueue);
     }
-  } catch (e) {}
+  } catch {}
 
   logger.info({ purgedCount, queueName: queueName || 'ALL' }, '[DLQ] Purged Dead-Letter Queue jobs');
 
@@ -285,22 +420,25 @@ export async function purgeAllDlqJobs(queueName?: string): Promise<{ purgedCount
 /**
  * Get aggregate statistics across BullMQ queues and DLQ
  */
-export async function getQueueStats(): Promise<{
+export async function getQueueStats(
+  allowedProjectIds?: Set<string>,
+  explicitProjectId?: string
+): Promise<{
   dlqTotal: number;
   dlqByQueue: Record<string, number>;
   queues: QueueHealthStats[];
 }> {
-  const dlqTotal = Array.from(inMemoryDlqStore.values()).filter(j => j.status === 'DEAD_LETTER').length;
+  let dlqTotal = 0;
   const dlqByQueue: Record<string, number> = {};
 
   for (const job of inMemoryDlqStore.values()) {
-    if (job.status === 'DEAD_LETTER') {
+    if (job.status === 'DEAD_LETTER' && (await isDlqJobVisibleToTenant(job, allowedProjectIds, explicitProjectId))) {
+      dlqTotal++;
       dlqByQueue[job.queueName] = (dlqByQueue[job.queueName] || 0) + 1;
     }
   }
 
   const queueStats: QueueHealthStats[] = [];
-
   const allQueueNames = new Set<string>([...registeredQueues.keys(), 'experiments', 'cleanup', 'telemetry']);
 
   for (const qName of allQueueNames) {
@@ -312,7 +450,7 @@ export async function getQueueStats(): Promise<{
     let delayed = 0;
     let paused = false;
 
-    if (queue) {
+    if (queue && !allowedProjectIds && !explicitProjectId) {
       try {
         const counts = await queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed');
         waiting = counts.waiting || 0;
@@ -322,10 +460,10 @@ export async function getQueueStats(): Promise<{
         delayed = counts.delayed || 0;
         try {
           paused = await queue.isPaused();
-        } catch (pErr) {
+        } catch {
           paused = false;
         }
-      } catch (err) {
+      } catch {
         // Degraded/mock mode counts fallback
       }
     }
@@ -337,14 +475,14 @@ export async function getQueueStats(): Promise<{
       completed,
       failed,
       delayed,
-      paused
+      paused,
     });
   }
 
   return {
     dlqTotal,
     dlqByQueue,
-    queues: queueStats
+    queues: queueStats,
   };
 }
 

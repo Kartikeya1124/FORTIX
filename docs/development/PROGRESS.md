@@ -71,3 +71,23 @@
   - `npm run lint` (`tsc --noEmit`) & `npm run build`: **Clean pass** (0 errors).
   - Live HTTP probes (`GET /health/live`, `GET /health/ready`, `GET /`, `POST /api/auth/login`): **All 200 OK**.
   - Secret scan & `git diff --check`: **0 leaked credentials/tokens, 0 whitespace errors**.
+
+---
+
+## Checkpoint: Full Red-Team Security Remediation, Session/RBAC Overhaul, Cloud Run Hardening & Audit Reconciliation
+- **Parent Remote Commit (`origin/main`)**: `e7d1402dbe86197ade81396404c034b53850fae6`
+- **Objective**:
+  1. Reconcile all 29 red-team security & reliability repairs (`FX-SEC-001` through `FX-REL-008`) and Cloud Run deployment fixes (`FX-DEP-001`) cleanly atop `origin/main` (`e7d1402`).
+  2. Remediate all external security audit P0/P1 findings (`FX-SEC-009` through `FX-SEC-012`):
+     - **Least-Privilege Registration & Admin RBAC (`FX-SEC-009`)**: Assign `role: 'DEVELOPER'` and `emailVerified: false` on `POST /api/auth/register` (never `'ADMIN'`), add `requireAdmin` + `/api/control/admin/users` audited role management, and scope workspace entitlements within owned projects.
+     - **`HttpOnly` Cookie Sessions, Double-Submit CSRF & Explicit CORS Allowlist (`FX-SEC-010`)**: Eliminate all `localStorage` `fortix_token` persistence across `Login.tsx`, `src/lib/api.ts`, `SocketContext.tsx`, and `App.tsx`; issue `HttpOnly` `fortix_session` + `fortix_csrf` cookies; enforce timing-safe `X-CSRF-Token` and `ALLOWED_ORIGINS` validation on Express and Socket.IO; disconnect active WebSockets immediately on logout, password change, and account deletion.
+     - **Cryptographic Password Reset & Email Verification (`FX-SEC-011`)**: Add migration `0004_auth_security_tokens.sql` (`users.email_verified` + `auth_action_tokens` storing SHA-256 hashes only), implement non-enumerating `POST /api/auth/forgot-password`, single-use expiring `POST /api/auth/reset-password`, `POST /api/auth/verify-email`, and `POST /api/auth/resend-verification`, and wire real 2-step UI flows in `Login.tsx` and `Settings.tsx`.
+     - **Production Credential Hygiene, Honest Readiness, Account Deletion, RLS & UX Completeness (`FX-SEC-012`)**: Remove prefilled demo credentials in `Login.tsx` and block demo accounts in production; remove hardcoded fallback URLs in `src/db/migrate.ts` and add `drizzle/postgres_rls_policies.sql`; remove blanket `ECONNREFUSED` suppression in `server.ts` and expose sanitized Redis health errors; enforce `503` readiness if `STRICT_PERSISTENT_DB=true` without persistent Postgres; add password-confirmed `DELETE /api/control/account`, structured `/api` JSON `404` handler, `<NotFound />` route, and `/privacy` & `/terms` pages.
+- **Key Files Modified / Created**:
+  - `drizzle/0004_auth_security_tokens.sql`, `drizzle/postgres_rls_policies.sql`, `drizzle/meta/_journal.json`, `src/db/schema.ts`, `src/db/index.ts`, `src/db/migrate.ts`, `src/db/init.ts`
+  - `src/lib/cors-csrf.ts`, `src/lib/auth-tokens.ts`, `src/lib/jwt-security.ts`, `src/lib/port.ts`, `src/lib/logger.ts`, `src/lib/webhooks.ts`, `src/lib/dlq.ts`
+  - `src/middleware/auth.ts`, `src/middleware/entitlements.ts`, `src/middleware/project.ts`, `src/middleware/apiKeyAuth.ts`
+  - `src/api/auth.ts`, `src/api/account.ts`, `src/api/admin.ts`, `src/api/index.ts`, `src/api/system.ts`, `src/api/projects.ts`, `src/api/keys.ts`, `src/api/webhooks.ts`, `src/api/dlq.ts`, `src/api/reports.ts`
+  - `server.ts`, `src/socket.ts`, `src/redis.ts`, `src/gateway/index.ts`, `src/gateway/ssrf.ts`, `src/services/SecurityGuard.ts`, `src/threat-detection/index.ts`, `src/storage/local-storage.ts`, `Dockerfile`, `.env.example`
+  - `src/lib/api.ts`, `src/context/SocketContext.tsx`, `src/components/Login.tsx`, `src/components/AlertingSettings.tsx`, `src/App.tsx`, `src/pages/Settings.tsx`, `src/pages/NotFound.tsx`, `src/pages/LegalPages.tsx`
+  - `tests/unit/security-redteam-regressions.test.ts`, `docs/security/DEFECT_REGISTER.md`, `docs/development/PROGRESS.md`

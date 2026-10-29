@@ -1,6 +1,6 @@
 import express from 'express';
 import { db, getStorageMode } from '../db/index.js';
-import { redisConnection, getRedisStorageMode } from '../redis.js';
+import { redisConnection, getRedisStorageMode, getLastRedisError } from '../redis.js';
 import { sql } from 'drizzle-orm';
 import { getSocketStats } from '../socket.js';
 import { systemHealthGauge, register } from '../lib/metrics.js';
@@ -13,9 +13,18 @@ let cachedHealth: any = null;
 let lastHealthCheckTime = 0;
 const HEALTH_CACHE_TTL_MS = 5000;
 
+function sanitizeHealthError(raw?: string): string {
+  if (!raw) return 'Database connection error';
+  return raw
+    .replace(/(?:postgres(?:ql)?|rediss?):\/\/[^\s'"]+/gi, '[REDACTED_URI]')
+    .replace(/password=\S+/gi, 'password=[REDACTED]')
+    .slice(0, 200);
+}
+
 export async function getDependenciesHealth() {
   const now = Date.now();
-  if (cachedHealth && (now - lastHealthCheckTime < HEALTH_CACHE_TTL_MS)) {
+  const isTestEnv = Boolean(process.env.VITEST || process.env.NODE_ENV === 'test');
+  if (!isTestEnv && cachedHealth && (now - lastHealthCheckTime < HEALTH_CACHE_TTL_MS)) {
     return cachedHealth;
   }
 
@@ -42,7 +51,7 @@ export async function getDependenciesHealth() {
     dbError = undefined;
   } catch (err: any) {
     dbStatus = 'error';
-    dbError = err?.message || 'Database connection error';
+    dbError = sanitizeHealthError(err?.message);
   }
 
   const redisStart = Date.now();
@@ -83,6 +92,7 @@ export async function getDependenciesHealth() {
     redis: {
       status: redisStatus,
       latencyMs: redisLatencyMs,
+      error: redisStatus === 'error' ? (getLastRedisError() || 'Redis connection error') : undefined,
       storageMode: getRedisStorageMode()
     },
     telemetry: {

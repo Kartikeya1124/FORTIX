@@ -1,7 +1,22 @@
-import { Login } from "./components/Login.js";
-import React, { useEffect, useState } from 'react';
+import { Login } from './components/Login.js';
+import React from 'react';
 import { BrowserRouter, Routes, Route, Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Activity, Shield, Server, Play, Settings as SettingsIcon, ShieldAlert, BarChart, Menu, X, LogOut, AlertTriangle, PanelLeft, Moon, Sun, Globe } from 'lucide-react';
+import {
+  Activity,
+  Shield,
+  Server,
+  Play,
+  Settings as SettingsIcon,
+  ShieldAlert,
+  BarChart,
+  Menu,
+  X,
+  LogOut,
+  AlertTriangle,
+  Moon,
+  Sun,
+  Globe,
+} from 'lucide-react';
 import Dashboard from './pages/Dashboard.js';
 import APIs from './pages/APIs.js';
 import PublicApiDirectory from './pages/PublicApiDirectory.js';
@@ -12,20 +27,25 @@ import Threats from './pages/Threats.js';
 import Topology from './pages/Topology.js';
 import Settings from './pages/Settings.js';
 import Verifications from './pages/Verifications.js';
+import NotFound from './pages/NotFound.js';
+import { PrivacyPolicyPage, TermsOfUsePage } from './pages/LegalPages.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { CommandPalette } from './components/CommandPalette.js';
 import { SocketProvider } from './context/SocketContext.js';
 import { ProjectProvider, useProject } from './context/ProjectContext.js';
 import { ProjectSwitcher } from './components/ProjectSwitcher.js';
+import { getCsrfToken, setCsrfToken } from './lib/api.js';
 
 function Layout({
   healthStatus,
   theme,
-  setTheme
+  setTheme,
+  onLogout,
 }: {
   healthStatus: { db: string; redis: string } | null;
   theme: string;
   setTheme: React.Dispatch<React.SetStateAction<string>>;
+  onLogout: () => Promise<void>;
 }) {
   const [searchQuery, setSearchQuery] = React.useState('');
   const navigate = useNavigate();
@@ -57,6 +77,7 @@ function Layout({
             <button
               className="md:hidden text-muted hover:text-strong transition shrink-0"
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              aria-label="Toggle navigation menu"
             >
               {isSidebarOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
@@ -66,20 +87,18 @@ function Layout({
                 FortiX <span className="text-primary text-[10px] align-top ml-0.5">GATEWAY</span>
               </h1>
             </div>
-            {/* Desktop Project Switcher with flexbox and responsive max-width */}
             <div className="hidden sm:block ml-1 sm:ml-2 pl-2 sm:pl-3 border-l border-subtle min-w-0 max-w-[180px] md:max-w-[220px] lg:max-w-[260px]">
               <ProjectSwitcher />
             </div>
           </div>
 
-          {/* Global Search Bar with responsive flex sizing */}
           <div className="flex-1 min-w-[100px] max-w-xs sm:max-w-sm md:max-w-md mx-1 sm:mx-2 md:mx-4">
             <input
               type="text"
               placeholder="Search APIs or press Enter for 800+ Public APIs... (Ctrl+K)"
               value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              onKeyDown={e => {
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
                 if (e.key === 'Enter' && searchQuery.trim() && location.pathname !== '/directory') {
                   navigate(`/directory?q=${encodeURIComponent(searchQuery.trim())}`);
                 }
@@ -89,45 +108,41 @@ function Layout({
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-            {/* Mobile Project Switcher */}
             <div className="sm:hidden">
               <ProjectSwitcher />
             </div>
-            <div className="hidden lg:flex gap-6">
-              <div className="flex flex-col items-end">
-                <span className="text-[10px] uppercase text-muted font-bold tracking-widest">System Status</span>
-                <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${isDegraded ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500 animate-pulse'}`}></div>
-                  <span className={`text-sm font-mono font-bold ${isDegraded ? 'text-amber-400' : 'text-strong'}`}>
-                    {isDegraded ? 'DEGRADED' : 'OPERATIONAL'}
-                  </span>
-                </div>
+            <div className="hidden lg:flex flex-col items-end mr-2">
+              <span className="text-[10px] uppercase text-muted font-bold tracking-widest">System Status</span>
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${isDegraded ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500 animate-pulse'}`}></div>
+                <span className={`text-sm font-mono font-bold ${isDegraded ? 'text-amber-400' : 'text-strong'}`}>
+                  {isDegraded ? 'DEGRADED' : 'OPERATIONAL'}
+                </span>
               </div>
-              <div className="flex items-center pl-4 border-l border-subtle gap-4">
-                <button
-                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                  className="flex items-center gap-2 text-muted hover:text-strong transition-colors"
-                  title="Toggle Theme"
-                >
-                  {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-                </button>
-                <button
-                  onClick={() => {
-                    localStorage.removeItem('fortix_token'); window.location.reload();
-                  }}
-                  className="flex items-center gap-2 text-muted hover:text-strong transition-colors"
-                  title="Logout"
-                >
-                  <LogOut size={18} />
-                </button>
-              </div>
+            </div>
+            <div className="flex items-center pl-2 sm:pl-4 border-l border-subtle gap-2.5 sm:gap-4">
+              <button
+                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                className="flex items-center gap-2 text-muted hover:text-strong transition-colors"
+                title="Toggle Theme"
+                aria-label="Toggle Theme"
+              >
+                {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
+              <button
+                onClick={onLogout}
+                className="flex items-center gap-2 text-muted hover:text-strong transition-colors"
+                title="Sign Out"
+                aria-label="Sign Out"
+              >
+                <LogOut size={18} />
+              </button>
             </div>
           </div>
         </header>
 
         {/* Main Content Area */}
         <main className="flex flex-1 overflow-hidden relative">
-          {/* Mobile Overlay */}
           {isSidebarOpen && (
             <div
               className="absolute inset-0 bg-base/80 z-40 md:hidden"
@@ -135,8 +150,7 @@ function Layout({
             />
           )}
 
-          {/* Sidebar */}
-          <aside className={`absolute z-50 md:relative h-full w-56 border-r border-subtle bg-transparent p-4 flex flex-col gap-2 shrink-0 transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+          <aside className={`absolute z-50 md:relative h-full w-56 border-r border-subtle bg-surface md:bg-transparent p-4 flex flex-col gap-2 shrink-0 transition-transform duration-300 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
             <div className="text-[11px] font-bold text-muted uppercase tracking-widest mb-2 px-2">Navigation</div>
             <nav className="flex-1 space-y-1 overflow-y-auto">
               <NavItem to="/" icon={<Activity size={16} />} label="Dashboard" active={location.pathname === '/'} onClick={() => setIsSidebarOpen(false)} />
@@ -152,14 +166,13 @@ function Layout({
             </nav>
             <div className="mt-auto p-3 bg-elevated rounded-lg border border-subtle shadow-glass">
               <div className="text-[10px] text-muted uppercase font-bold mb-1">Environment</div>
-              <div className="text-xs font-mono text-primary font-bold">production-sandbox</div>
+              <div className="text-xs font-mono text-primary font-bold">control-plane</div>
               <div className="text-[10px] text-muted mt-1">FortiX Resilient Gateway</div>
             </div>
           </aside>
 
-          {/* Page Content */}
           <div className="flex-1 flex flex-col overflow-hidden">
-            <div className="flex-1 p-6 overflow-y-auto">
+            <div className="flex-1 p-4 sm:p-6 overflow-y-auto">
               <ErrorBoundary>
                 <Outlet context={{ searchQuery, theme, setTheme }} />
               </ErrorBoundary>
@@ -167,15 +180,19 @@ function Layout({
           </div>
         </main>
 
-        <footer className="px-6 py-2.5 border-t border-subtle bg-surface flex justify-between items-center shrink-0">
-          <div className="text-[11px] text-muted">© 2026 Faultline Labs · FortiX Continuous Resilience & API Security Gateway</div>
+        <footer className="px-4 sm:px-6 py-2.5 border-t border-subtle bg-surface flex flex-wrap justify-between items-center gap-2 shrink-0">
+          <div className="text-[11px] text-muted">© 2026 Faultline Labs · FortiX Continuous Resilience &amp; API Security Gateway</div>
+          <div className="flex items-center gap-4 text-[11px] text-muted">
+            <Link to="/privacy" className="hover:text-strong transition-colors">Privacy Policy</Link>
+            <Link to="/terms" className="hover:text-strong transition-colors">Terms of Use</Link>
+          </div>
         </footer>
       </div>
     </div>
   );
 }
 
-function NavItem({ to, icon, label, active, onClick }: { to: string, icon: React.ReactNode, label: string, active?: boolean, onClick?: () => void }) {
+function NavItem({ to, icon, label, active, onClick }: { to: string; icon: React.ReactNode; label: string; active?: boolean; onClick?: () => void }) {
   return (
     <Link
       to={to}
@@ -192,10 +209,16 @@ function NavItem({ to, icon, label, active, onClick }: { to: string, icon: React
   );
 }
 
+function SocketWrapper({ children }: { children: React.ReactNode }) {
+  const { currentProject } = useProject();
+  return <SocketProvider projectId={currentProject?.id}>{children}</SocketProvider>;
+}
+
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = React.useState(false);
   const [isLoadingAuth, setIsLoadingAuth] = React.useState(true);
   const [theme, setTheme] = React.useState(() => localStorage.getItem('fortix_theme_v2') || 'dark');
+  const [healthStatus, setHealthStatus] = React.useState<{ db: string; redis: string } | null>(null);
 
   React.useEffect(() => {
     if (theme === 'dark') {
@@ -208,18 +231,30 @@ export default function App() {
   }, [theme]);
 
   React.useEffect(() => {
-    fetch('/api/auth/me', { headers: { 'X-Fortix-Token': localStorage.getItem('fortix_token') || '' } }).then(res => {
-      if (res.ok) setIsAuthenticated(true);
-      setIsLoadingAuth(false);
-    }).catch(() => setIsLoadingAuth(false));
+    try {
+      localStorage.removeItem('fortix_token');
+    } catch {
+      // Ignore storage access errors
+    }
+
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then(async (res) => {
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data.csrfToken) setCsrfToken(data.csrfToken);
+          setIsAuthenticated(true);
+        }
+        setIsLoadingAuth(false);
+      })
+      .catch(() => setIsLoadingAuth(false));
 
     const handleUnauthorized = () => {
+      setCsrfToken(null);
       setIsAuthenticated(false);
     };
     window.addEventListener('fortix:auth-unauthorized', handleUnauthorized);
     return () => window.removeEventListener('fortix:auth-unauthorized', handleUnauthorized);
   }, []);
-  const [healthStatus, setHealthStatus] = React.useState<{ db: string, redis: string } | null>(null);
 
   React.useEffect(() => {
     const checkHealth = async () => {
@@ -227,22 +262,45 @@ export default function App() {
         const res = await fetch('/api/health');
         if (res.ok || res.status === 503) {
           const data = await res.json();
-          const pgOk = (data.postgres?.status === 'healthy' || data.db === 'healthy');
-          const rdOk = (data.redis?.status === 'healthy' || data.redis === 'healthy');
+          const pgOk = data.postgres?.status === 'healthy' || data.db === 'healthy';
+          const rdOk = data.redis?.status === 'healthy' || data.redis === 'healthy';
           setHealthStatus({
             db: pgOk ? 'healthy' : 'error',
-            redis: rdOk ? 'healthy' : 'error'
+            redis: rdOk ? 'healthy' : 'error',
           });
           return;
         }
         setHealthStatus({ db: 'error', redis: 'error' });
-      } catch (err) {
+      } catch {
         setHealthStatus({ db: 'error', redis: 'error' });
       }
     };
     checkHealth();
     const intervalId = setInterval(checkHealth, 30000);
     return () => clearInterval(intervalId);
+  }, []);
+
+  const handleLogout = React.useCallback(async () => {
+    try {
+      const csrf = getCsrfToken();
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
+          'X-Requested-With': 'FortiX-Control-Plane',
+        },
+      });
+    } catch {
+      // Proceed with client session teardown even on network interruption
+    } finally {
+      setCsrfToken(null);
+      try {
+        localStorage.removeItem('fortix_token');
+        localStorage.removeItem('fortix_project_id');
+      } catch {}
+      setIsAuthenticated(false);
+    }
   }, []);
 
   if (isLoadingAuth) {
@@ -253,50 +311,58 @@ export default function App() {
     );
   }
 
-  if (!isAuthenticated) return (
-    <div className="dark min-h-screen w-full bg-[#090b10] text-zinc-100 relative">
-      {healthStatus && (healthStatus.db === 'error' || healthStatus.redis === 'error') && (
-        <div className="bg-red-950/90 text-red-300 text-xs md:text-sm font-semibold px-4 py-2.5 text-center border-b border-red-500/40 flex items-center justify-center gap-2 fixed top-0 inset-x-0 z-50 backdrop-blur-md">
-          <AlertTriangle size={16} />
-          <span>
-            System degraded: {healthStatus.db === 'error' ? 'PostgreSQL' : ''} {healthStatus.db === 'error' && healthStatus.redis === 'error' ? 'and' : ''} {healthStatus.redis === 'error' ? 'Redis' : ''} {healthStatus.db === 'error' && healthStatus.redis === 'error' ? 'are' : 'is'} currently unavailable.
-          </span>
-        </div>
-      )}
-      <Login onLogin={() => setIsAuthenticated(true)} />
-    </div>
-  );
-
-function SocketWrapper({ children }: { children: React.ReactNode }) {
-  const { currentProject } = useProject();
-  return (
-    <SocketProvider projectId={currentProject?.id}>
-      {children}
-    </SocketProvider>
-  );
-}
-
   return (
     <BrowserRouter>
-      <ProjectProvider>
-        <SocketWrapper>
-          <Routes>
-            <Route path="/" element={<Layout healthStatus={healthStatus} theme={theme} setTheme={setTheme} />}>
-              <Route index element={<Dashboard />} />
-              <Route path="apis" element={<APIs />} />
-              <Route path="directory" element={<PublicApiDirectory />} />
-              <Route path="security" element={<Security />} />
-              <Route path="experiments" element={<Experiments />} />
-              <Route path="resilience" element={<Resilience />} />
-              <Route path="threats" element={<Threats />} />
-              <Route path="topology" element={<Topology />} />
-              <Route path="verifications" element={<Verifications />} />
-              <Route path="settings" element={<Settings />} />
-              <Route path="*" element={<div className="p-8 text-center text-muted">Feature in development</div>} />
-            </Route>
-          </Routes>
-        </SocketWrapper>
-      </ProjectProvider>
+      <Routes>
+        <Route path="/privacy" element={<PrivacyPolicyPage />} />
+        <Route path="/terms" element={<TermsOfUsePage />} />
+        {!isAuthenticated ? (
+          <Route
+            path="*"
+            element={
+              <div className="dark min-h-screen w-full bg-[#090b10] text-zinc-100 relative">
+                {healthStatus && (healthStatus.db === 'error' || healthStatus.redis === 'error') && (
+                  <div className="bg-red-950/90 text-red-300 text-xs md:text-sm font-semibold px-4 py-2.5 text-center border-b border-red-500/40 flex items-center justify-center gap-2 fixed top-0 inset-x-0 z-50 backdrop-blur-md">
+                    <AlertTriangle size={16} />
+                    <span>
+                      System degraded: {healthStatus.db === 'error' ? 'PostgreSQL' : ''} {healthStatus.db === 'error' && healthStatus.redis === 'error' ? 'and' : ''} {healthStatus.redis === 'error' ? 'Redis' : ''} {healthStatus.db === 'error' && healthStatus.redis === 'error' ? 'are' : 'is'} currently unavailable.
+                    </span>
+                  </div>
+                )}
+                <Login onLogin={() => setIsAuthenticated(true)} />
+              </div>
+            }
+          />
+        ) : (
+          <Route
+            path="/"
+            element={
+              <ProjectProvider>
+                <SocketWrapper>
+                  <Layout
+                    healthStatus={healthStatus}
+                    theme={theme}
+                    setTheme={setTheme}
+                    onLogout={handleLogout}
+                  />
+                </SocketWrapper>
+              </ProjectProvider>
+            }
+          >
+            <Route index element={<Dashboard />} />
+            <Route path="apis" element={<APIs />} />
+            <Route path="directory" element={<PublicApiDirectory />} />
+            <Route path="security" element={<Security />} />
+            <Route path="experiments" element={<Experiments />} />
+            <Route path="resilience" element={<Resilience />} />
+            <Route path="threats" element={<Threats />} />
+            <Route path="topology" element={<Topology />} />
+            <Route path="verifications" element={<Verifications />} />
+            <Route path="settings" element={<Settings />} />
+            <Route path="*" element={<NotFound isAuthenticated={true} />} />
+          </Route>
+        )}
+      </Routes>
     </BrowserRouter>
   );
 }

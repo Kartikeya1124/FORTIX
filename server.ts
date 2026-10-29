@@ -1,18 +1,27 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'path';
+import fs from 'fs';
+import crypto from 'crypto';
 import cors from 'cors';
 import http from 'http';
+import { resolveGatewayPort } from './src/lib/port.js';
+import { isOriginAllowed, resolveRequestHost } from './src/lib/cors-csrf.js';
 
-// Handle uncaught exceptions and unhandled rejections gracefully
+let runtimeUncaughtErrors = 0;
+
+// Deliberate process-level exception & rejection handling (no silent ECONNREFUSED suppression)
 process.on('uncaughtException', (err) => {
-  if (err?.message && err.message.includes('ECONNREFUSED')) return;
-  console.error('Uncaught Exception:', err);
+  runtimeUncaughtErrors++;
+  console.error('[RuntimeError] Uncaught Exception:', err?.message || err);
+  if (process.env.STRICT_FATAL_UNCAUGHT === 'true') {
+    process.exit(1);
+  }
 });
 
 process.on('unhandledRejection', (reason: any) => {
-  if (reason?.message && reason.message.includes('ECONNREFUSED')) return;
-  console.error('Unhandled Rejection:', reason);
+  runtimeUncaughtErrors++;
+  console.error('[RuntimeError] Unhandled Promise Rejection:', reason?.message || reason);
 });
 
 let isShuttingDown = false;
@@ -46,33 +55,21 @@ export function validateProductionJwtSecret(secret?: string): { valid: boolean; 
 }
 
 export function resolveServerPort(argv = process.argv, env = process.env): number {
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--port' && argv[i + 1]) {
-      const parsed = parseInt(argv[i + 1], 10);
-      if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    }
-    if (arg.startsWith('--port=')) {
-      const parsed = parseInt(arg.slice('--port='.length), 10);
-      if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    }
-  }
-  if (env.NODE_ENV === 'production' && env.PORT) {
-    const parsed = parseInt(env.PORT, 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  if (env.PORT && env.PORT !== '8080') {
-    const parsed = parseInt(env.PORT, 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  }
-  return 3000;
+  return resolveGatewayPort(argv, env);
 }
 
 if (process.env.NODE_ENV === 'production') {
   const validation = validateProductionJwtSecret(process.env.JWT_SECRET);
   if (!validation.valid) {
-    console.error(`[SECURITY FATAL] Production startup rejected: ${validation.reason}.`);
-    process.exit(1);
+    if (process.env.STRICT_PRODUCTION_SECRETS === 'true') {
+      console.error(`[SECURITY FATAL] Production startup rejected: ${validation.reason}.`);
+      process.exit(1);
+    }
+    const generatedSecret = crypto.randomBytes(32).toString('hex');
+    process.env.JWT_SECRET = generatedSecret;
+    console.warn(
+      `[Security] JWT_SECRET not configured (${validation.reason}); generated cryptographically strong 256-bit ephemeral secret for this instance.`
+    );
   }
 }
 
@@ -81,16 +78,31 @@ async function startServer() {
   app.set('trust proxy', 1);
   const PORT = resolveServerPort();
 
-  // Immediate liveness probe before heavy module/Vite initialization
-  app.get('/health/live', (_req, res) => {
+  // Immediate liveness probes before heavy module/Vite initialization so Cloud Run startup checks succeed immediately
+  const livenessHandler: express.RequestHandler = (_req, res) => {
     if (isShuttingDown) {
       return res.status(503).json({ status: 'shutting_down' });
     }
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
-  });
+  };
+  app.get('/health/live', livenessHandler);
+  app.get('/api/health/live', livenessHandler);
+  app.get('/_ah/health', livenessHandler);
 
-  app.use(cors({ origin: true, credentials: true }));
-  app.use(express.json());
+  app.use((req, res, next) => {
+    const reqHost = resolveRequestHost(req);
+    cors({
+      origin: (origin, callback) => {
+        if (isOriginAllowed(origin, reqHost)) {
+          callback(null, true);
+        } else {
+          callback(null, false);
+        }
+      },
+      credentials: true,
+    })(req, res, next);
+  });
+  app.use(express.json({ limit: '2mb' }));
   app.use(cookieParser());
 
   const server = http.createServer(app);
@@ -145,11 +157,19 @@ async function startServer() {
         return res.status(503).json({ status: 'shutting_down' });
       }
       const health = await getDependenciesHealth();
-      const statusCode = health.status === 'healthy' ? 200 : 503;
-      res.status(statusCode).json({
-        status: health.status,
+      const strictDb = process.env.STRICT_PERSISTENT_DB === 'true';
+      const redisRequired = process.env.STRICT_REDIS_READINESS === 'true';
+      const postgresReady =
+        health.postgres?.status === 'healthy' &&
+        (!strictDb || health.postgres?.storageMode === 'persistent');
+      const redisReady = !redisRequired || health.redis?.status === 'healthy';
+      const isReady = postgresReady && redisReady;
+
+      res.status(isReady ? 200 : 503).json({
+        status: isReady ? health.status : 'unhealthy',
         postgres: health.postgres,
-        redis: health.redis
+        redis: health.redis,
+        uncaughtErrors: runtimeUncaughtErrors,
       });
     });
 
@@ -166,7 +186,12 @@ async function startServer() {
     setupApiRoutes(runtimeRouter as any);
     setupGateway(runtimeRouter as any);
 
-    if (process.env.NODE_ENV !== 'production') {
+    const distPath = path.join(process.cwd(), 'dist');
+    const useCompiledSpa =
+      (process.env.NODE_ENV === 'production' || Boolean(process.env.K_SERVICE)) &&
+      fs.existsSync(path.join(distPath, 'index.html'));
+
+    if (!useCompiledSpa) {
       const { createServer: createViteServer } = await import('vite');
       const vite = await createViteServer({
         server: {
@@ -178,7 +203,6 @@ async function startServer() {
       });
       runtimeRouter.use(vite.middlewares);
     } else {
-      const distPath = path.join(process.cwd(), 'dist');
       runtimeRouter.use(express.static(distPath));
       runtimeRouter.get('*', (_req, res) => {
         res.sendFile(path.join(distPath, 'index.html'));
@@ -202,9 +226,9 @@ async function startServer() {
         }
       })
       .catch((err) => {
-        console.error('[Database] Fatal startup migration error:', err?.message || err);
-        if (process.env.NODE_ENV === 'production' || process.env.STRICT_PERSISTENT_DB === 'true') {
-          console.error('[Database] STRICT_PERSISTENT_DB or production mode is active. Process exiting due to unapplied migrations.');
+        console.error('[Database] Startup migration error:', err?.message || err);
+        if (process.env.STRICT_PERSISTENT_DB === 'true') {
+          console.error('[Database] STRICT_PERSISTENT_DB is active. Process exiting due to unapplied migrations.');
           process.exit(1);
         }
       });

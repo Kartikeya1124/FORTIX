@@ -130,7 +130,7 @@ router.post('/', requireProjectOwnership, async (req: any, res) => {
 // POST /api/control/keys/:id/rotate - Rotate an existing key, generating a fresh secret
 router.post('/:id/rotate', requireProjectOwnership, async (req: any, res) => {
   const { id } = req.params;
-  const projectId = req.body.projectId;
+  const projectId = req.body.projectId || req.query.projectId;
 
   try {
     const [existing] = await db
@@ -143,20 +143,11 @@ router.post('/:id/rotate', requireProjectOwnership, async (req: any, res) => {
       return res.status(404).json({ error: 'Key not found' });
     }
 
-    // Invalidate old secret immediately
-    invalidateApiKeyCache(id, projectId);
-    await publishKeyRevocation({
-      event: 'api_key.revoked',
-      keyId: id,
-      projectId,
-      timestamp: new Date().toISOString(),
-      reason: 'rotation',
-    });
-
     const newSecret = crypto.randomBytes(32).toString('hex');
     const newSecretHash = await bcrypt.hash(newSecret, 10);
     const rawKey = `${existing.keyPrefix}_${newSecret}`;
 
+    // 1. Commit new secretHash to PostgreSQL FIRST so concurrent requests cannot re-populate cache with the old secret
     const [updated] = await db
       .update(apiKeys)
       .set({
@@ -165,6 +156,16 @@ router.post('/:id/rotate', requireProjectOwnership, async (req: any, res) => {
       })
       .where(and(eq(apiKeys.id, id), eq(apiKeys.projectId, projectId)))
       .returning();
+
+    // 2. Evict old secret from local and distributed gateway caches AFTER DB commit
+    invalidateApiKeyCache(id, projectId);
+    await publishKeyRevocation({
+      event: 'api_key.revoked',
+      keyId: id,
+      projectId,
+      timestamp: new Date().toISOString(),
+      reason: 'rotation',
+    });
 
     // Record audit event
     try {

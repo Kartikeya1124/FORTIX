@@ -53,6 +53,7 @@ const FORBIDDEN_HOST_PATTERNS: (string | RegExp)[] = [
   /\.invalid$/i,
   /\.test$/i,
   /\.onion$/i,
+  /^fortix-demo-api\.(?!internal$)/i,
 ];
 
 /**
@@ -119,6 +120,16 @@ export class SecurityGuard {
             errorCode: 'UNSUPPORTED_PROTOCOL',
           };
         }
+        if (parsedUrl.username || parsedUrl.password) {
+          return {
+            isValid: false,
+            hostname: parsedUrl.hostname || '',
+            targetUrl: urlOrHost,
+            resolvedIps: [],
+            reason: 'Embedded credentials in URLs are forbidden.',
+            errorCode: 'INVALID_URL',
+          };
+        }
         hostname = parsedUrl.hostname;
       }
     } catch {
@@ -131,14 +142,18 @@ export class SecurityGuard {
       };
     }
 
-    // Strip square brackets from IPv6 hostnames
-    let cleanHost = hostname.toLowerCase();
+    // Strip square brackets and trailing DNS root dots from hostnames
+    let cleanHost = hostname.toLowerCase().trim().replace(/\.+$/, '');
     if (cleanHost.startsWith('[') && cleanHost.endsWith(']')) {
       cleanHost = cleanHost.slice(1, -1);
     }
 
-    // Demo API bypass allowlist if configured
-    if (opts.allowDemoApi && cleanHost.startsWith('fortix-demo-api')) {
+    // Demo API bypass allowlist if configured (strictly exact hostname and official demo ports 3001/4000/default)
+    if (
+      opts.allowDemoApi &&
+      (cleanHost === 'fortix-demo-api' || cleanHost === 'fortix-demo-api.internal') &&
+      (!parsedUrl || parsedUrl.port === '' || parsedUrl.port === '3001' || parsedUrl.port === '4000')
+    ) {
       return {
         isValid: true,
         hostname,
@@ -338,7 +353,8 @@ export class SecurityGuard {
    * Evaluates hostname against blacklisted TLDs, internal patterns, and cloud metadata hostnames.
    */
   public isForbiddenHostname(host: string): boolean {
-    const clean = host.toLowerCase().trim();
+    const clean = host.toLowerCase().trim().replace(/\.+$/, '');
+    if (!clean) return true;
 
     for (const pattern of FORBIDDEN_HOST_PATTERNS) {
       if (typeof pattern === 'string') {
@@ -361,7 +377,7 @@ export class SecurityGuard {
    * - Shortened Dotted: 127.1 -> 127.0.0.1, 10.1 -> 10.0.0.1, 127.0.1 -> 127.0.0.1
    */
   public parseNumericOrEncodedIp(host: string): string | null {
-    const trimmed = host.trim().toLowerCase();
+    const trimmed = host.trim().toLowerCase().replace(/\.+$/, '');
 
     // 1. Single integer string (decimal, hex "0x...", octal "0...")
     if (/^(0x[0-9a-f]+|0[0-7]+|[0-9]+)$/.test(trimmed)) {
@@ -497,8 +513,25 @@ export class SecurityGuard {
       cleanIp = cleanIp.slice(1, -1);
     }
 
-    // 1. IPv4-mapped IPv6: ::ffff:127.0.0.1 or ::ffff:7f00:1 or 0:0:0:0:0:ffff:...
-    const ipv4MappedMatch = cleanIp.match(/^(?:::ffff:|0:0:0:0:0:ffff:)([0-9a-f.:]+)$/i);
+    // Reject IPv6 zone indices (e.g. fe80::1%eth0)
+    if (cleanIp.includes('%')) {
+      return { isRestricted: true, type: 'invalid' };
+    }
+
+    // Canonicalize expanded/uncompressed IPv6 representations
+    try {
+      const canonicalUrl = new URL(`http://[${cleanIp}]/`);
+      if (canonicalUrl.hostname.startsWith('[') && canonicalUrl.hostname.endsWith(']')) {
+        cleanIp = canonicalUrl.hostname.slice(1, -1).toLowerCase();
+      }
+    } catch {
+      if (!net.isIPv6(cleanIp)) {
+        return { isRestricted: true, type: 'invalid' };
+      }
+    }
+
+    // 1. IPv4-mapped / IPv4-translated IPv6: ::ffff:127.0.0.1, ::ffff:7f00:1, ::ffff:0:127.0.0.1
+    const ipv4MappedMatch = cleanIp.match(/^(?:::ffff:(?:0:)?|0:0:0:0:0:ffff:(?:0:)?)([0-9a-f.:]+)$/i);
     if (ipv4MappedMatch) {
       const embedded = ipv4MappedMatch[1];
       if (net.isIPv4(embedded)) {
@@ -523,10 +556,29 @@ export class SecurityGuard {
       return { isRestricted: true, type: 'invalid' };
     }
 
-    // 2. IPv4-compatible IPv6 (deprecated): ::192.168.1.1
-    const ipv4CompatMatch = cleanIp.match(/^::([0-9.]+)/);
-    if (ipv4CompatMatch && net.isIPv4(ipv4CompatMatch[1])) {
-      return this.classifyIpv4(ipv4CompatMatch[1]);
+    // 1.5 NAT64 Well-Known Prefix RFC 6052 (64:ff9b::/96 and 64:ff9b:1::/48)
+    if (cleanIp.startsWith('64:ff9b:')) {
+      return { isRestricted: true, type: 'reserved', canonicalIp: cleanIp };
+    }
+
+    // 2. IPv4-compatible IPv6 (deprecated): ::192.168.1.1 or ::7f00:1
+    if (cleanIp !== '::' && cleanIp !== '::1' && cleanIp.startsWith('::')) {
+      const rest = cleanIp.slice(2);
+      if (net.isIPv4(rest)) {
+        return this.classifyIpv4(rest);
+      }
+      const hexParts = rest.split(':');
+      if (hexParts.length === 2) {
+        const high = parseInt(hexParts[0], 16);
+        const low = parseInt(hexParts[1], 16);
+        if (!isNaN(high) && !isNaN(low)) {
+          const b0 = (high >>> 8) & 255;
+          const b1 = high & 255;
+          const b2 = (low >>> 8) & 255;
+          const b3 = low & 255;
+          return this.classifyIpv4(`${b0}.${b1}.${b2}.${b3}`);
+        }
+      }
     }
 
     // 3. Loopback (::1) and Unspecified (::)
@@ -538,17 +590,17 @@ export class SecurityGuard {
     }
 
     // 4. Unique Local Addresses (ULA) RFC 4193: fc00::/7 (fc00:: to fdff:...)
-    if (/^f[cd][0-9a-f]{2}:/i.test(cleanIp) || cleanIp.startsWith('fc') || cleanIp.startsWith('fd')) {
+    if (/^f[cd][0-9a-f]{0,2}:/i.test(cleanIp) || cleanIp.startsWith('fc') || cleanIp.startsWith('fd')) {
       return { isRestricted: true, type: 'private', canonicalIp: cleanIp };
     }
 
     // 5. Link-Local Unicast RFC 4291: fe80::/10 (fe80:: to febf:...)
-    if (/^fe[89ab][0-9a-f]:/i.test(cleanIp) || cleanIp.startsWith('fe80:')) {
+    if (/^fe[89ab][0-9a-f]?:?/i.test(cleanIp) || cleanIp.startsWith('fe80:')) {
       return { isRestricted: true, type: 'link-local', canonicalIp: cleanIp };
     }
 
     // 6. Site-Local (deprecated) RFC 3879: fec0::/10
-    if (/^fe[c-f][0-9a-f]:/i.test(cleanIp) || cleanIp.startsWith('fec0:')) {
+    if (/^fe[c-f][0-9a-f]?:?/i.test(cleanIp) || cleanIp.startsWith('fec0:')) {
       return { isRestricted: true, type: 'private', canonicalIp: cleanIp };
     }
 
@@ -562,17 +614,22 @@ export class SecurityGuard {
       return { isRestricted: true, type: 'test-net', canonicalIp: cleanIp };
     }
 
+    // 8.5 Teredo Tunneling RFC 4380: 2001:0000::/32
+    if (cleanIp.startsWith('2001:0:') || cleanIp.startsWith('2001:0000:') || cleanIp === '2001::') {
+      return { isRestricted: true, type: 'reserved', canonicalIp: cleanIp };
+    }
+
     // 9. Discard prefix RFC 6666: 100::/64
-    if (cleanIp.startsWith('100::')) {
+    if (cleanIp.startsWith('100::') || cleanIp.startsWith('0100::')) {
       return { isRestricted: true, type: 'reserved', canonicalIp: cleanIp };
     }
 
     // 10. 6to4 prefix (2002::/16) - decode embedded IPv4
     if (cleanIp.startsWith('2002:')) {
       const parts = cleanIp.split(':');
-      if (parts.length >= 3) {
-        const p1 = parseInt(parts[1], 16);
-        const p2 = parseInt(parts[2], 16);
+      if (parts.length >= 2) {
+        const p1 = parseInt(parts[1] || '0', 16);
+        const p2 = parseInt(parts[2] || '0', 16);
         if (!isNaN(p1) && !isNaN(p2)) {
           const b0 = (p1 >>> 8) & 255;
           const b1 = p1 & 255;

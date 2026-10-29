@@ -26,11 +26,12 @@ function getModuleDirname(): string {
 }
 
 export async function runMigrations(customDbUrl?: string, customMigrationsFolder?: string): Promise<void> {
-  const rawConn = customDbUrl || process.env.DATABASE_URL || 'postgres://fortix:fortix_password@127.0.0.1:5432/fortix_db';
+  const rawConn = customDbUrl || process.env.DATABASE_URL || '';
   const connectionString = normalizeDatabaseUrl(rawConn);
+  const strictPersistent = Boolean(customDbUrl) || process.env.STRICT_PERSISTENT_DB === 'true';
 
-  if (!connectionString) {
-    throw new Error('DATABASE_URL is not set for database migration.');
+  if (strictPersistent && !connectionString) {
+    throw new Error('DATABASE_URL is required when running strict persistent database migrations.');
   }
 
   // Determine migrations folder
@@ -59,37 +60,42 @@ export async function runMigrations(customDbUrl?: string, customMigrationsFolder
     (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) &&
     process.env.TEST_AGAINST_PERSISTENT !== 'true';
 
-  if (isIsolatedUnitTest) {
-    const { db } = await import('./index.js');
-    await db.execute(sql`CREATE SCHEMA IF NOT EXISTS drizzle`);
-    await db.execute(sql`
-      CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
-        id int,
-        hash text,
-        created_at bigint
-      )
-    `);
-    const countRes = await db.execute(sql`SELECT COUNT(*)::int as count FROM drizzle.__drizzle_migrations`);
-    const count = (Array.isArray(countRes) ? countRes[0]?.count : (countRes as any)?.rows?.[0]?.count) ?? 0;
-    if (count === 0 && migrationsFolder) {
-      const journalPath = path.join(migrationsFolder, 'meta', '_journal.json');
-      if (fs.existsSync(journalPath)) {
-        const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
-        let seq = 1;
-        for (const entry of journal.entries) {
-          const sqlFilePath = path.join(migrationsFolder, `${entry.tag}.sql`);
-          if (fs.existsSync(sqlFilePath)) {
-            const fileContent = fs.readFileSync(sqlFilePath, 'utf8');
-            const hash = crypto.createHash('sha256').update(fileContent).digest('hex');
-            await db.execute(sql`
-              INSERT INTO drizzle.__drizzle_migrations (id, hash, created_at)
-              VALUES (${seq++}, ${hash}, ${entry.when})
-            `);
+  if (!customDbUrl) {
+    const { db, getStorageMode } = await import('./index.js');
+    if (isIsolatedUnitTest || getStorageMode() === 'in-memory' || !connectionString) {
+      if (strictPersistent) {
+        throw new Error('Refusing in-memory migration tracking while STRICT_PERSISTENT_DB=true.');
+      }
+      await db.execute(sql`CREATE SCHEMA IF NOT EXISTS drizzle`);
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS drizzle.__drizzle_migrations (
+          id int,
+          hash text,
+          created_at bigint
+        )
+      `);
+      const countRes = await db.execute(sql`SELECT COUNT(*)::int as count FROM drizzle.__drizzle_migrations`);
+      const count = (Array.isArray(countRes) ? countRes[0]?.count : (countRes as any)?.rows?.[0]?.count) ?? 0;
+      if (count === 0 && migrationsFolder) {
+        const journalPath = path.join(migrationsFolder, 'meta', '_journal.json');
+        if (fs.existsSync(journalPath)) {
+          const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+          let seq = 1;
+          for (const entry of journal.entries) {
+            const sqlFilePath = path.join(migrationsFolder, `${entry.tag}.sql`);
+            if (fs.existsSync(sqlFilePath)) {
+              const fileContent = fs.readFileSync(sqlFilePath, 'utf8');
+              const hash = crypto.createHash('sha256').update(fileContent).digest('hex');
+              await db.execute(sql`
+                INSERT INTO drizzle.__drizzle_migrations (id, hash, created_at)
+                VALUES (${seq++}, ${hash}, ${entry.when})
+              `);
+            }
           }
         }
       }
+      return;
     }
-    return;
   }
 
   const isLocal = isLocalDatabaseHost(connectionString);
@@ -106,9 +112,6 @@ export async function runMigrations(customDbUrl?: string, customMigrationsFolder
   console.log('[Migration] Target migrations directory:', migrationsFolder);
 
   try {
-    if (process.env.NODE_ENV !== 'production' && connectionString.includes('render.com')) {
-      throw new Error('Render database unreachable in preview environment, using resilient in-memory database');
-    }
     // 1. Verify Postgres connectivity
     await migrationClient`SELECT 1 as connected`;
 
@@ -158,6 +161,15 @@ export async function runMigrations(customDbUrl?: string, customMigrationsFolder
     // 4. Run Drizzle's authoritative migration pipeline
     const migrationDb = drizzle(migrationClient);
     await migrate(migrationDb, { migrationsFolder });
+
+    // 4b. Apply PostgreSQL defense-in-depth Row-Level Security policies when enabled
+    if (process.env.ENABLE_POSTGRES_RLS !== 'false') {
+      const rlsPath = path.join(migrationsFolder, 'postgres_rls_policies.sql');
+      if (fs.existsSync(rlsPath)) {
+        const rlsSql = fs.readFileSync(rlsPath, 'utf8');
+        await migrationClient.unsafe(rlsSql);
+      }
+    }
 
     // 5. Bootstrap default developer accounts on fresh empty database (non-production or explicit opt-in only)
     const allowSeed =
@@ -229,9 +241,8 @@ export async function runMigrations(customDbUrl?: string, customMigrationsFolder
     console.log('[Migration] All database migrations verified and applied successfully.');
   } catch (error) {
     const isStrict =
-      Boolean(customDbUrl) ||
-      process.env.NODE_ENV === 'production' ||
-      process.env.STRICT_PERSISTENT_DB === 'true';
+      strictPersistent ||
+      process.env.NODE_ENV === 'production';
     if (isStrict) {
       console.error('[Migration] Migration execution failed:', error instanceof Error ? error.message : error);
       throw error;

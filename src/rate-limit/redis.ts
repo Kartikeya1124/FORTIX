@@ -1,4 +1,4 @@
-import { redisConnection } from "../redis.js";
+import { redisConnection, isRealRedisActive } from "../redis.js";
 import * as dotenv from 'dotenv';
 import { db } from '../db/index.js';
 import { securityPolicies } from '../db/schema.js';
@@ -105,6 +105,28 @@ export async function checkRateLimit(projectId: string, routeId: string, identif
     console.error('[Rate Limit] DB Policy lookup failed, using defaults', err);
   }
   
+  const evaluateLocalBucket = () => {
+    pruneFallbackStore();
+    const bucket = fallbackStore.get(key) || { tokens: limit, lastRefill: Date.now() };
+    const now = Date.now();
+    const timePassed = Math.max(0, now - bucket.lastRefill);
+    const refill = Math.floor(timePassed * (refillRate / 60000));
+
+    if (refill > 0) {
+      bucket.tokens = Math.min(limit, bucket.tokens + refill);
+      bucket.lastRefill = now;
+    }
+
+    let allowed = false;
+    if (bucket.tokens > 0) {
+      bucket.tokens -= 1;
+      allowed = true;
+    }
+
+    fallbackStore.set(key, bucket);
+    return { allowed, limit, remaining: bucket.tokens };
+  };
+
   // Handle Redis connection unavailable
   if (redis.status !== 'ready') {
     const policy = getEffectiveRedisFailurePolicy();
@@ -116,25 +138,12 @@ export async function checkRateLimit(projectId: string, routeId: string, identif
 
     // In fail-open mode (development / preview only or explicit override), use bounded local in-memory fallback
     // NOTE: Local in-memory fallback enforces rate limits ONLY within this single process, NOT across distributed replicas.
-    pruneFallbackStore();
-    let bucket = fallbackStore.get(key) || { tokens: limit, lastRefill: Date.now() };
-    const now = Date.now();
-    const timePassed = Math.max(0, now - bucket.lastRefill);
-    const refill = Math.floor(timePassed * (refillRate / 60000));
-    
-    if (refill > 0) {
-      bucket.tokens = Math.min(limit, bucket.tokens + refill);
-      bucket.lastRefill = now;
-    }
-    
-    let allowed = false;
-    if (bucket.tokens > 0) {
-      bucket.tokens -= 1;
-      allowed = true;
-    }
-    
-    fallbackStore.set(key, bucket);
-    return { allowed, limit, remaining: bucket.tokens };
+    return evaluateLocalBucket();
+  }
+
+  // Standalone single-instance mode (no external Redis configured): enforce rate limits via bounded in-memory token bucket
+  if (!isRealRedisActive) {
+    return evaluateLocalBucket();
   }
 
   const script = `
@@ -183,12 +192,8 @@ export async function checkRateLimit(projectId: string, routeId: string, identif
   } catch (error) {
     const policy = getEffectiveRedisFailurePolicy();
     if (policy === 'fail-open') {
-      console.warn('[Rate Limit] Redis evaluation error, failing open per policy');
-      return {
-        allowed: true,
-        limit,
-        remaining: Math.max(0, limit - 1)
-      };
+      console.warn('[Rate Limit] Redis evaluation error, using bounded local token bucket per fail-open policy');
+      return evaluateLocalBucket();
     }
     console.error('[Rate Limit] Redis evaluation error, failing closed per policy');
     return {

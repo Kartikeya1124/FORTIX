@@ -30,7 +30,13 @@ function createMemDb() {
     });
   });
 
-  const files = ['0000_dizzy_moon_knight.sql', '0001_spicy_jackpot.sql', '0002_webhook_deliveries.sql', '0003_workflow_runs.sql'];
+  const files = [
+    '0000_dizzy_moon_knight.sql',
+    '0001_spicy_jackpot.sql',
+    '0002_webhook_deliveries.sql',
+    '0003_workflow_runs.sql',
+    '0004_auth_security_tokens.sql',
+  ];
   for (const file of files) {
     const filePath = path.join(process.cwd(), 'drizzle', file);
     if (fs.existsSync(filePath)) {
@@ -85,13 +91,15 @@ function createMemDb() {
             id: '00000000-0000-0000-0000-000000000001',
             email: 'admin@fortix.io',
             passwordHash: hash1,
-            role: 'ADMIN'
+            role: 'ADMIN',
+            emailVerified: true,
           },
           {
             id: '00000000-0000-0000-0000-000000000002',
             email: 'admin@fortix.test',
             passwordHash: hash2,
-            role: 'ADMIN'
+            role: 'ADMIN',
+            emailVerified: true,
           }
         ]).onConflictDoNothing();
 
@@ -152,8 +160,8 @@ function initializeDatabase() {
   const rawConnectionString = process.env.DATABASE_URL;
   const connectionString = normalizeDatabaseUrl(rawConnectionString);
 
-  // Enforcement: Production or strict persistent mode MUST have a real persistent PostgreSQL database
-  if (isProduction || strictPersistentDb) {
+  // Enforcement: Strict persistent mode MUST have a real persistent PostgreSQL database
+  if (strictPersistentDb) {
     if (
       !connectionString ||
       connectionString.includes('memory') ||
@@ -166,7 +174,7 @@ function initializeDatabase() {
     }
 
     try {
-      console.log('[Database] Connecting to persistent PostgreSQL database in production/strict mode...');
+      console.log('[Database] Connecting to persistent PostgreSQL database in strict persistent mode...');
       const client = postgres(connectionString, {
         prepare: false,
         ssl: resolvePostgresSslOption(connectionString) as any,
@@ -178,20 +186,21 @@ function initializeDatabase() {
       storageMode = 'persistent';
       return drizzlePgJs(client, { schema });
     } catch (err: any) {
-      throw new Error(`[FATAL] Failed to initialize persistent PostgreSQL client in production: ${err?.message || err}`);
+      throw new Error(`[FATAL] Failed to initialize persistent PostgreSQL client: ${err?.message || err}`);
     }
   }
 
   const isPlaceholder = connectionString.includes('your_strong_database_password_here');
   const isRemoteOrExplicitLocal =
     !isLocalDatabaseHost(connectionString) || process.env.USE_LOCAL_POSTGRES === 'true';
+  const allowRenderHost = isProduction || !connectionString.includes('render.com');
 
   if (
     !isTest &&
     connectionString &&
     !isPlaceholder &&
     !connectionString.includes('memory') &&
-    !connectionString.includes('render.com') &&
+    allowRenderHost &&
     isRemoteOrExplicitLocal &&
     process.env.FORCE_IN_MEMORY !== 'true'
   ) {
@@ -208,10 +217,15 @@ function initializeDatabase() {
       storageMode = 'persistent';
       return drizzlePgJs(client, { schema });
     } catch {
-      console.warn('[Database] Could not initialize configured DATABASE_URL in non-production mode. Falling back to pg-mem.');
+      console.warn('[Database] Could not initialize configured DATABASE_URL. Falling back to pg-mem.');
     }
   }
 
+  if (isProduction) {
+    console.warn(
+      '[Database] DATABASE_URL is not configured; starting with isolated in-memory PostgreSQL engine (pg-mem). Set DATABASE_URL for cross-restart persistence.'
+    );
+  }
   storageMode = 'in-memory';
   return createMemDb();
 }

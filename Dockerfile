@@ -14,19 +14,21 @@ RUN npm run build
 
 FROM base AS runner
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=8080
 
-# Create a non-root user
-RUN addgroup -S fortix && adduser -S fortix -G fortix
+# Create a non-root user and writable artifact/report directories
+RUN addgroup -S fortix && adduser -S fortix -G fortix && \
+    mkdir -p /app/storage/artifacts /app/reports && \
+    chown -R fortix:fortix /app
 
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/drizzle ./drizzle
+COPY --from=builder --chown=fortix:fortix /app/package.json ./
+COPY --from=builder --chown=fortix:fortix /app/node_modules ./node_modules
+COPY --from=builder --chown=fortix:fortix /app/dist ./dist
+COPY --from=builder --chown=fortix:fortix /app/drizzle ./drizzle
 
 USER fortix
 
-EXPOSE 3000
+EXPOSE 8080
 
 # Use node instead of cross-env or tsx in production
 CMD ["node", "dist/server.cjs"]

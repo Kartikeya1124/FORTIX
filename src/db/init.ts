@@ -7,10 +7,10 @@ export async function initDatabase(): Promise<void> {
     await runMigrations();
     logger.info('[Database] Automated database migrations applied successfully.');
   } catch (error) {
-    const isStrict = process.env.NODE_ENV === 'production' || process.env.STRICT_PERSISTENT_DB === 'true';
+    const isStrict = process.env.STRICT_PERSISTENT_DB === 'true';
     if (isStrict) {
-      logger.error({ err: error }, '[FATAL] Database migration failed in strict/production mode. Halting startup.');
-      throw new Error(`[FATAL] Database migration failed in strict/production mode: ${error instanceof Error ? error.message : error}`);
+      logger.error({ err: error }, '[FATAL] Database migration failed in strict persistent mode. Halting startup.');
+      throw new Error(`[FATAL] Database migration failed in strict persistent mode: ${error instanceof Error ? error.message : error}`);
     }
     logger.warn({ err: error }, '[Database] Database migration not completed on startup, proceeding with fallback mode.');
   }

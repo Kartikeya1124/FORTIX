@@ -51,10 +51,11 @@ export function authenticateFortixApiKey(requiredScope?: string) {
     try {
       let keyRecord: any = null;
 
-      // Check cache first
+      // Check cache first (must validate both revocation and expiration)
       const cached = apiKeyCache.get(rawKey);
       if (cached && Date.now() - cached.cachedAt < 30000) {
-        if (cached.key && !cached.key.revokedAt) {
+        const notExpired = !cached.key?.expiresAt || new Date(cached.key.expiresAt) > new Date();
+        if (cached.key && !cached.key.revokedAt && notExpired) {
           keyRecord = cached.key;
         } else {
           apiKeyCache.delete(rawKey);
@@ -81,14 +82,23 @@ export function authenticateFortixApiKey(requiredScope?: string) {
           return res.status(401).json({ error: 'Invalid API Key secret' });
         }
 
-        keyRecord = k;
-        apiKeyCache.set(rawKey, { key: k, cachedAt: Date.now() });
+        const { secretHash: _omitSecretHash, ...safeKeyRecord } = k;
+        keyRecord = safeKeyRecord;
+        apiKeyCache.set(rawKey, { key: safeKeyRecord, cachedAt: Date.now() });
       }
 
-      // Check project isolation if projectId header/param/query is specified
-      const expectedProjectId = (req.headers['x-fortix-project-id'] as string) || (req.query.projectId as string) || req.body?.projectId;
-      if (expectedProjectId && keyRecord.projectId !== expectedProjectId) {
-        return res.status(403).json({ error: 'Cross-project access forbidden: Key does not belong to specified project' });
+      // Check project isolation across all supplied projectId locations (header, params, query, body)
+      const candidateProjectIds = [
+        req.headers['x-fortix-project-id'],
+        req.params?.projectId,
+        req.query?.projectId,
+        req.body?.projectId,
+      ].filter((val): val is string => typeof val === 'string' && val.trim().length > 0 && val !== 'undefined' && val !== 'null');
+
+      for (const expectedProjectId of candidateProjectIds) {
+        if (keyRecord.projectId !== expectedProjectId.trim()) {
+          return res.status(403).json({ error: 'Cross-project access forbidden: Key does not belong to specified project' });
+        }
       }
 
       // Check required scope
